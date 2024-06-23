@@ -13,7 +13,7 @@ setup(
         "anyio==4.4.0",
         "appnope==0.1.4",
         "asttokens==2.4.1",
-        "bson==0.5.10",
+        # "bson==0.5.10",
         "cachetools==5.3.3",
         "certifi==2024.6.2",
         "charset-normalizer==3.3.2",
