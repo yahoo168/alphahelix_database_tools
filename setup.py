@@ -65,6 +65,7 @@ setup(
         "pyasn1_modules==0.4.0",
         "pydantic==2.7.4",
         "pydantic_core==2.18.4",
+        "pymongo==4.7.3"
         "Pygments==2.18.0",
         "PyMuPDF==1.24.5",
         "PyMuPDFb==1.24.3",
