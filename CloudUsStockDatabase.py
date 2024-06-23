@@ -51,7 +51,7 @@ class CloudUsStockDatabase(AbstractCloudDatabase):
             if len(item_data_list) > 0:
                 self.save_data_to_MDB(item=item, data_list=item_data_list)
             else:
-                logging.info(f"[NOTE][{item}][{datetime2_str(start_date)}-{datetime2_str(end_date)}不存在未更新資料]")
+                logging.info(f"[NOTE][{item}][{datetime2str(start_date)}-{datetime2str(end_date)}不存在未更新資料]")
                 
     def save_stock_market_status(self, source="polygon"):
         if source == "polygon":
