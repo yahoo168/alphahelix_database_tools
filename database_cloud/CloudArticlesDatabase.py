@@ -1,11 +1,11 @@
 from .AbstractCloudDatabase import *
-from .news_tools import *
-from .openai_tools import call_OpenAI_API
-from .pdf_tools import get_cleaned_paragraph_list_from_pdf
-from .google_tools import *
-import re, os, io, json, requests
+from ..external_tools.news_tools import *
+from ..external_tools.openai_tools import call_OpenAI_API
+from ..external_tools.pdf_tools import get_cleaned_paragraph_list_from_pdf
+from ..external_tools.google_tools import *
+import os, json, requests
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 # fitz（PyMuPDF）擷取PDF文字 &圖片
 
 """
