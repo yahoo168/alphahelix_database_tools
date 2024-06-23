@@ -1,3 +1,4 @@
 .ipynb_checkpoints/
 temp_store/
+_pycache__/
 venv/
