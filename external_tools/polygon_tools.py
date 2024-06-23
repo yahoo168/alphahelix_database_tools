@@ -1,7 +1,8 @@
 import requests
-import os, sys, logging, time
-from .utils import *
-from threading import Thread, Lock
+import os, logging, time
+from datetime import datetime, timedelta
+from utils import datetime2str
+from threading import Thread
 import pandas as pd
 
 # Note：已去除存檔，改為回傳data dict
