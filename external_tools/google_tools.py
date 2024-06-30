@@ -13,7 +13,11 @@ class GoogleCloudStorageTools():
     def get_blob(self, bucket_name, blob_name):
         """Get a blob from the bucket."""
         bucket = self.storage_client.bucket(bucket_name)
-        return bucket.get_blob(blob_name)
+        blob = bucket.get_blob(blob_name)
+        # 若blob不存在，則創建一個新的空blob
+        if blob is None:
+            blob = bucket.blob(blob_name)
+        return blob
     
     # 指定folder，取得其中的blob列表
     def get_blob_list_in_folder(self, bucket_name, folder_name):
@@ -35,6 +39,8 @@ class GoogleCloudStorageTools():
         """Uploads a file to the bucket and returns the public URL."""
         blob_name, file_type, src_file = blob_data["blob_name"], blob_data["file_type"], blob_data["file"]
         blob = self.get_blob(bucket_name, blob_name)
+        print(blob_name)
+        print(blob)
         # 若存在metadata，則將metadata加入blob（GCS稱為中繼資料）
         if "metadata" in blob_data:
             blob.metadata = blob_data["metadata"]
