@@ -1,12 +1,13 @@
-import os
 from google.cloud import storage
 import concurrent.futures
+import os
+import mimetypes
 
 class GoogleCloudStorageTools():
     def __init__(self, credential_file_path):
         # 設定google cloud storage的認證檔案路徑
         os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = credential_file_path
-        self.self.storage_client = storage.Client()
+        self.storage_client = storage.Client()
     
     # 給定bucket名稱和blob名稱，返回blib物件
     def get_blob(self, bucket_name, blob_name):
@@ -37,6 +38,16 @@ class GoogleCloudStorageTools():
         # 若存在metadata，則將metadata加入blob（GCS稱為中繼資料）
         if "metadata" in blob_data:
             blob.metadata = blob_data["metadata"]
+        
+        # 設定Content-Type（可盡量依照原始檔案的Content-Type設定在GCS的Content-Type）
+        # Content-Type若為pdf，則在瀏覽器中會直接顯示，而非下載
+        content_type, _ = mimetypes.guess_type(blob_name)
+        if content_type:
+            blob.content_type = content_type
+        else:
+            # 默认设置为二进制文件类型
+            blob.content_type = "application/octet-stream"
+            
         # 依照檔案類型選擇不同上傳方式
         if file_type == "file":
             blob.upload_from_file(src_file)
