@@ -2,4 +2,5 @@
 test.ipynb/
 temp_store/
 __pycache__/
+alphahelix_database_tools.egg-info/
 venv/
