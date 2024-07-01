@@ -1,12 +1,12 @@
 from setuptools import setup, find_packages #type: ignore
 
 setup(
-    name='alphahelix-database-cloud',
-    version='0.1.0',
+    name='alphahelix_database_tools',
+    version='0.1.1',
     author='Jeff Chen',
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
-    url="https://github.com/yahoo168/alphahelix-database-cloud",
+    url="https://github.com/yahoo168/alphahelix_database_tools",
     packages=find_packages(),
     install_requires=[
         "annotated-types==0.7.0",
