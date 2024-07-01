@@ -7,7 +7,7 @@ setup(
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
     url="https://github.com/yahoo168/alphahelix_database_tools",
-    packages=find_packages(),
+    packages=["alphahelix_database_tools", "alphahelix_database_tools.*"],
     install_requires=[
         "annotated-types==0.7.0",
         "anyio==4.4.0",
