@@ -11,7 +11,7 @@ import google_auth_oauthlib.flow
 #import googleapiclient.discovery
 from googleapiclient.discovery import build
 
-from utils import str2datetime, str2unix_timestamp
+from alphahelix_database_tools.utils import str2datetime, str2unix_timestamp
 
 # 用途 : 抓取seakingalpha的個股分析（analysis）
 def get_stock_report_from_seekingalpha(API_key, ticker, start_date=None, size=40):

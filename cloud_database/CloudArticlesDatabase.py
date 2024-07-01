@@ -1,11 +1,13 @@
-from .AbstractCloudDatabase import *
-from external_tools.news_tools import *
-from external_tools.openai_tools import call_OpenAI_API
-from external_tools.pdf_tools import get_cleaned_paragraph_list_from_pdf
-from external_tools.google_tools import *
 import os, json, requests
 from collections import defaultdict
 from datetime import datetime
+
+from alphahelix_database_tools.external_tools.news_tools import *
+from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API
+from alphahelix_database_tools.external_tools.pdf_tools import get_cleaned_paragraph_list_from_pdf
+from alphahelix_database_tools.external_tools.google_tools import *
+from .AbstractCloudDatabase import *
+
 # fitz（PyMuPDF）擷取PDF文字 &圖片
 
 """
@@ -225,7 +227,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         # 待改：多線程的情況下，會導致重複覆蓋？
         temp_pdf_folder_path = "/Users/yahoo168/Desktop/temp_pdf"
         make_folder(temp_pdf_folder_path)
-        for stock_report_meta in stock_report_meta_list[:10]:
+        for stock_report_meta in stock_report_meta_list:
             response = requests.get(stock_report_meta["url"])
             temp_pdf_file_path = os.path.join(temp_pdf_folder_path, "temp_pdf_file.pdf")
            

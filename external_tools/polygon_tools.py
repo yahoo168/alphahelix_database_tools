@@ -1,9 +1,10 @@
 import requests
 import os, logging, time
 from datetime import datetime, timedelta
-from utils import datetime2str
 from threading import Thread
 import pandas as pd
+
+from alphahelix_database_tools.utils import datetime2str
 
 # Note：已去除存檔，改為回傳data dict
 # 自polygon下載EOD價量相關資料，若無指定起始/結束日期，則自動以上次更新日期的後一日開始抓取資料，更新至今日
