@@ -1,7 +1,7 @@
 from .AbstractCloudDatabase import *
 
 class CloudUsStockDatabase(AbstractCloudDatabase):
-    def __init__(self, config_folder_path):
+    def __init__(self, config_folder_path=None):
         super().__init__(config_folder_path=config_folder_path)  # 調用父類 MDB_DATABASE 的__init__方法
         self.polygon_API_key = "vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj"
         self.rapid_API_key = "5eeaf20b6dmsh06b146a0f8df7d6p1fb4c8jsnb19977dfeebf"

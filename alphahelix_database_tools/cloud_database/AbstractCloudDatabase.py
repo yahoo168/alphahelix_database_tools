@@ -34,10 +34,16 @@ logging.basicConfig(level=logging.INFO,
     datefmt = '%Y%m%d %H:%M:%S',)
 
 class AbstractCloudDatabase():
-    def __init__(self, config_folder_path: str):
+    #  若外部未指定config_folder_path，則預設為當前模組的config資料夾
+    def __init__(self, config_folder_path=None):
+        if not config_folder_path:
+            # 获取当前模块文件的绝对路径
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # 构建config相对路径
+            config_folder_path = os.path.join(current_dir, "config")
+            
         self._parse_config(config_folder_path)
         self.cur_cluster_name = None
-        #self._connect_to_cluster(self.cur_cluster_name)
     
     def _parse_config(self, config_folder_path: str):
         data_route_file_path = os.path.join(config_folder_path, "data_route.xlsx")
@@ -49,9 +55,9 @@ class AbstractCloudDatabase():
         username, password = ini_config["MDB"]["username"], ini_config["MDB"]["password"]
 
         self.cluster_uri_dict = {
-            # cluster: alphahelixdatabase
+            # cluster: alphahelixdatabase（用於量化交易系統）
             "quant": f"mongodb+srv://{username}:{password}@alphahelixdatabase.nadkzwd.mongodb.net/?retryWrites=true&w=majority&appName=alphahelixDatabase",
-            # cluster: articles
+            # cluster: articles（用於內部系統）
             "articles": f"mongodb+srv://{username}:{password}@articles.zlnaiap.mongodb.net/?retryWrites=true&w=majority&appName=articles"
         }
 

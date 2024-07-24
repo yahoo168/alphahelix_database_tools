@@ -39,13 +39,13 @@ MongoDB 会将其转换为 UTC 时间并存储为一个没有时区偏移的时�
 """
 
 class CloudArticlesDatabase(AbstractCloudDatabase):
-    def __init__(self, config_folder_path):
+    def __init__(self, config_folder_path=None):
         super().__init__(config_folder_path=config_folder_path)  # 調用父類 MDB_DATABASE 的__init__方法
         #self.polygon_API_key = "vzrcQO0aPAoOmk3s_WEAs4PjBz4VaWLj"
         self.rapid_API_key = "5eeaf20b6dmsh06b146a0f8df7d6p1fb4c8jsnb19977dfeebf"
         self.news_API_key = "3969806328c5462ebc86dfe94acecd9c"
         self.gmail_API_servie = None
-        self.OpenAI_API_key = "sk-proj-GzvuIu7QRcMeXMxzpRcJT3BlbkFJXYcMxEWH6aiytV5woJOc"
+        self.OpenAI_API_key = "sk-proj-X9X6GJdh0xx6z89KTgJrT3BlbkFJX0GWbUpaA1GdoLTVfmhy"
         self.MDB_client = MongoClient(self.cluster_uri_dict["articles"], server_api=ServerApi('1'))
         
     def save_stock_news(self, ticker_list, start_date=None):
@@ -132,18 +132,6 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         news_df = news_df.reset_index()
         return news_df
 
-    # 若不預設區間，則固定取最新一日內的raw shorts
-    def get_raw_shorts_df(self, ticker, start_date=None, end_date=datetime.now()):
-        if start_date == None:
-            start_date = end_date - timedelta(days=1)
-
-        all_shorts_df = self.get_item_df(item="raw_shorts", method="by_date", start_date=start_date, end_date=end_date)
-        # 篩選出包含此ticker的shorts
-        shorts_df = all_shorts_df[all_shorts_df["ticker"].apply(lambda x: ticker in x)]
-        shorts_df = shorts_df.loc[:, ["title", "source"]]
-        shorts_df = shorts_df.reset_index()
-        return shorts_df
-
     def get_stock_following_issue_meta_list(self, ticker):
         # 待改：這邊的是client是？
         issue_meta_list = list(self.MDB_client["users"]["following_issues"].find({"tickers": ticker}, sort=[("upload_timestamp", -1)], limit=10))
@@ -153,24 +141,35 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         return issue_meta_list
 
     # 預設是取當下到往前一日作摘要
-    # 待確認: SE shorts、雲端主機的now怎麼設定
-    # 待改：理論上還要融合長新聞，才會生成markdown
-    def generate_shorts_summary(self, ticker_list, end_date=datetime.now(), period=1, words_per_shorts=8):
+    # 待確認: SE shorts、雲端主機的now怎麼設定 # 待改：理論上還要融合長新聞，才會生成markdown
+    def save_shorts_summary(self, ticker_list, end_date=datetime.now(), period=1, words_per_shorts=8):
         def _call_shorts_summary_LLM(shorts_content_list, ticker, word_number):
             prompt = (
                       f"以下是一些可能與「股票代號為{ticker}的公司」有關的新聞消息，"
                       f"請挑選其中與公司相關性較高的消息，組合成一篇中文新聞，切勿包含任何不在消息中的內容"
                       f"並在各個段落用標題敘述段落重點，不含標題的總字數約{word_number}字，標題使用markdown語法中的###表示\n"
-                     )
+                    )
             
             prompt += "\n".join(shorts_content_list)
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="markdown")
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="text")
+        
+        # 若不預設區間，則固定取最新一日內的raw shorts
+        def get_raw_shorts_df(ticker, start_date=None, end_date=datetime.now()):
+            if start_date == None:
+                start_date = end_date - timedelta(days=1)
+
+            all_shorts_df = self.get_item_df(item="raw_shorts", method="by_date", start_date=start_date, end_date=end_date)
+            # 篩選出包含此ticker的shorts
+            shorts_df = all_shorts_df[all_shorts_df["ticker"].apply(lambda x: ticker in x)]
+            shorts_df = shorts_df.loc[:, ["title", "source"]]
+            shorts_df = shorts_df.reset_index()
+            return shorts_df
 
         start_date = end_date - timedelta(days=period)
         logging.info(f"[SHORTS][SUMMARY]{datetime2str(start_date)}-{datetime2str(end_date)}")
         data_list = list()
         for ticker in ticker_list:        
-            raw_shorts_df = self.get_raw_shorts_df(ticker, start_date, end_date)
+            raw_shorts_df = get_raw_shorts_df(ticker, start_date, end_date)
             num_of_raw_shorts = len(raw_shorts_df)
             
             if num_of_raw_shorts==0:
@@ -185,9 +184,11 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             shorts_summary = _call_shorts_summary_LLM(shorts_content_list, ticker=ticker, word_number= words_per_shorts*num_of_raw_shorts)
             
             data_list.append(
-                {"date": end_date,
+                {
+                 "data_timestamp": datetime(end_date.year, end_date.month, end_date.day),
                  "ticker": ticker,
-                 "shorts_summary": shorts_summary}
+                 "shorts_summary": shorts_summary
+                }
             )
         if len(data_list) > 0:
             self.save_data_to_MDB(item="shorts_summary", data_list=data_list)
@@ -197,9 +198,9 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         meta_list = self.MDB_client["raw_content"]["raw_stock_report_non_auto"].find({"ticker": ticker, 
                                                         "date": {"$gte": start_date, "$lt": end_date}})
         return meta_list
-    
+
     @str2datetime_input
-    def save_stock_report_summary(self, ticker, start_date=None, end_date=datetime.now()):
+    def process_raw_stock_report(self):
         def _creat_stock_report_summary(paragraph_list, ticker, output_format="text"):
             prompt = (f"以下是一篇「股票代號為{ticker}的公司」的研究報告，"
                     f"請以markdown的語法來整理這份報告，包括'全文摘要', '看多論點', '看空論點'三個段落，並翻譯為中文，"
@@ -217,38 +218,47 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"研究報告內容:\n{'\n'.join(paragraph_list)}\n"
             return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
         
-        stock_report_meta_list = list(self.MDB_client["raw_content"]["raw_stock_report_non_auto"].find({"ticker": ticker, 
-                                            "upload_timestamp": {"$gte": start_date, "$lte": end_date}}, sort=[("date", -1)]))
+        unprocessed_stock_report_meta_list = list(self.MDB_client["raw_content"]["raw_stock_report_non_auto"].find({"is_processed": False}))
         
-        # 取出該標的的追蹤問題
-        stock_following_issue_meta_list = self.MDB_client["users"]["following_issues"].find({"tickers": ticker}, limit=10)
-        stock_following_issue_list = [meta["issue"] for meta in stock_following_issue_meta_list]
-        
-        # 待改：多線程的情況下，會導致重複覆蓋？
+        # 待改：多線程的情況下，可能會導致重複覆蓋
         temp_pdf_folder_path = "/Users/yahoo168/Desktop/temp_pdf"
         make_folder(temp_pdf_folder_path)
-        for stock_report_meta in stock_report_meta_list:
+        logging.info(f"[SERVER][Data Process][共{len(unprocessed_stock_report_meta_list)}篇non auto stock report待處理]")
+        for index, stock_report_meta in enumerate(unprocessed_stock_report_meta_list):
+            # 取出該標的的追蹤問題
+            stock_report_id, ticker = stock_report_meta["_id"], stock_report_meta["ticker"]
+            logging.info(f"[SERVER][Data Process][{ticker}][開始處理第{index}篇non auto stock report]")
+            stock_following_issue_meta_list = self.MDB_client["users"]["following_issues"].find({"tickers": ticker}, limit=10)
+            stock_following_issue_list = [meta["issue"] for meta in stock_following_issue_meta_list]
             response = requests.get(stock_report_meta["url"])
-            temp_pdf_file_path = os.path.join(temp_pdf_folder_path, "temp_pdf_file.pdf")
-           
+            
+            # 將下載的 PDF 文件保存到本地
             if response.status_code == 200:
-                # 將下載的 PDF 文件保存到本地
+                temp_pdf_file_path = os.path.join(temp_pdf_folder_path, "temp_pdf_file.pdf")
                 with open(temp_pdf_file_path, 'wb') as file:
                     file.write(response.content)     
             else:
                 logging.warn(f"[SERVER][PDF][Error {response.status_code}]")
                 continue
             
+            # 從PDF中提取出主要段落
             paragraph_list = get_cleaned_paragraph_list_from_pdf(temp_pdf_file_path)
             logging.info(f"[LLM][preprocess]{stock_report_meta["title"]}")
-            # 全文摘要 - 調用LLM
+            # 報告全文摘要 - 調用LLM
             stock_report_meta["summary"] = _creat_stock_report_summary(paragraph_list, ticker, output_format="text")
-            # 問題追蹤 - 調用LLM
-            following_issue_json_text = _creat_issue_following_summary(paragraph_list, ticker, stock_following_issue_list, word_number=500, output_format="json_object")
-            stock_report_meta["following_issue"] = json.loads(following_issue_json_text)
+            # 若該個股存在追蹤問題，則進行追蹤問題摘要（調用LLM），否則填入空字典
+            if len(stock_following_issue_list) > 0:
+                following_issue_json_text = _creat_issue_following_summary(paragraph_list, ticker, stock_following_issue_list, word_number=500, output_format="json_object")
+                stock_report_meta["following_issue"] = json.loads(following_issue_json_text)
+            else:
+                stock_report_meta["following_issue"] = {}
+            
+            # 標註處理時間戳記
             stock_report_meta["processed_timestamp"] = datetime.now()
-            # 存入MongoDB
+            # 將處理後的stock report meta，存入MongoDB
             self.MDB_client["preprocessed_content"]["stock_report"].insert_one(stock_report_meta)
+            # 標記該stock report已經處理過
+            self.MDB_client["raw_content"]["raw_stock_report_non_auto"].update_one({"_id": stock_report_id}, {"$set": {"is_processed": True}})
             
     def save_stock_report_review(self, ticker, review_report_nums=10):
         def _create_raw_stock_report_review(summary_list, ticker, output_format="json_object"):
@@ -282,8 +292,21 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"新的論點: {new_argument}\n\n"
             return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="text")
             
-        # 從mongoDB取得報告原始的meta data
-        stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find({"ticker":ticker}, {"_id":0}, sort=[("processed_timestamp"), -1], limit=review_report_nums))
+        # 取得自上次總結後，新上傳報告的meta data，預設為最新的10篇
+        # 查找stock_report_review中data_timestamp字段的最大值
+        last_reviews_doc = self.MDB_client["published_content"]["stock_report_review"].find_one(sort=[("data_timestamp", -1)])
+
+        last_processed_timestamp = None
+        if last_reviews_doc:
+            last_processed_timestamp = last_reviews_doc["data_timestamp"]
+            
+        stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find({"ticker": ticker, "processed_timestamp": {"$gt": last_processed_timestamp}})
+                                    .sort([("processed_timestamp", -1)]).limit(review_report_nums))
+        
+        # 若無新的報告，則不進行總結
+        if len(stock_report_meta_list) == 0:
+            return
+        logging.info(f"[SERVER][Data Process][{ticker}][stock_report_review]")
         # 逐篇進行摘要，取得看多/看空的論點（json格式）
         summary_list = [stock_report_meta["summary"] for stock_report_meta in stock_report_meta_list]
             
@@ -301,12 +324,16 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         # 取得舊的看多/看空論點，進行比較
         old_stock_report_review_meta = self.MDB_client["published_content"]["stock_report_review"].find_one({"ticker": ticker}, sort=[("date", -1)])
         
-        old_bullish_argument_list = old_stock_report_review_meta["stock_report_review"]["bullish_outlook"]
-        old_bearish_argument_list = old_stock_report_review_meta["stock_report_review"]["bearish_outlook"]
-        
-        bullish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bullish_argument_list, new_argument_list=bullish_outlook_argument_list)
-        bearish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bearish_argument_list, new_argument_list=bearish_outlook_argument_list)
-        
+        if old_stock_report_review_meta:
+            old_bullish_argument_list = old_stock_report_review_meta["stock_report_review"]["bullish_outlook"]
+            old_bearish_argument_list = old_stock_report_review_meta["stock_report_review"]["bearish_outlook"]
+            
+            bullish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bullish_argument_list, new_argument_list=bullish_outlook_argument_list)
+            bearish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bearish_argument_list, new_argument_list=bearish_outlook_argument_list)
+        # 若無舊的看多/看空論點，則不進行比較，填入空字串
+        else:
+            bullish_outlook_diff, bearish_outlook_diff = "", ""
+            
         # 存入MongoDB
         stock_report_review_meta = {
             "date": datetime.now(),
