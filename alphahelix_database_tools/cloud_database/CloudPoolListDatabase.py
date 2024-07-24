@@ -5,7 +5,9 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
     def __init__(self, config_folder_path=None):
         super().__init__(config_folder_path=config_folder_path)  # 調用父類 MDB_DATABASE 的__init__方法
         self.MDB_client = MongoClient(self.cluster_uri_dict["articles"], server_api=ServerApi('1'))
-        self.google_drive_client = GoogleDriveTools(credential_file_path="/Users/yahoo168/Desktop/GOOGLE_APPLICATION_CREDENTIALS.json") #type: ignore
+    
+    def set_google_drive_client(self, GOOGLE_APPLICATION_CREDENTIALS):
+        self.google_drive_client = GoogleDriveTools(credential_file_path=GOOGLE_APPLICATION_CREDENTIALS)
     
     # 取得tracking_status（series）
     def get_tracking_status_series(self):
