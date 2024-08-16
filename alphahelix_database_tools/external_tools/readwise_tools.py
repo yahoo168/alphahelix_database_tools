@@ -2,6 +2,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 import re
 from bson.objectid import ObjectId
+import logging
 
 class ReadwiseTool():
     def __init__(self, MDB_client, token=None):
@@ -92,7 +93,7 @@ class ReadwiseTool():
         else:
             start_date = datetime.now() - timedelta(days=days)
 
-        print(f"[SAVE][Readwise] fetch from {start_date}")
+        logging.info(f"[SAVE][Readwise] fetch from {start_date}")
         raw_article_meta_list = self.fetch_data_from_readwsie_api(self.token, start_date.isoformat())
         # 若近期沒有新的筆記則跳過
         if raw_article_meta_list:
@@ -102,7 +103,7 @@ class ReadwiseTool():
             for article_meta in clean_article_meta_list:
                 article_meta["uploader"] = user_id
                 self.collection.update_one(
-                        {"article_title": article_meta["article_title"]},  # 用article_title作為條件來查找文檔
+                        {"article_url": article_meta["article_url"]},  # 用article_url作為條件來查找文檔（若使用title，可能會有重複）
                         {"$set": article_meta,  # 如果文檔已存在，更新所有字段
                     },
                         upsert=True  # 開啟 upsert 選項

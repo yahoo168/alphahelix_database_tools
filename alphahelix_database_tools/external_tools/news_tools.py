@@ -151,8 +151,8 @@ def get_articles_from_reuters(API_key, keyword, num=10):
 class GMAIL_NEWS_SCRAP():
     def __init__(self):
         # 待改：應該外部給定
-        self.credentials_file_path = "/Users/yahoo168/Desktop/資料庫_測試功能/gmail_acess/gmail_api_credentials.json"
-        self.token_file_path = "/Users/yahoo168/Desktop/資料庫_測試功能/gmail_acess/token.json"        
+        self.credentials_file_path = "/Users/yahoo168/Desktop/gmail_acess/gmail_api_credentials.json"
+        self.token_file_path = "/Users/yahoo168/Desktop/gmail_acess/token.json"        
         self._build_service()
 
 

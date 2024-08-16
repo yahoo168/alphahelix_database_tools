@@ -1,8 +1,30 @@
-import fitz  # PyMuPDF
+import fitz  # fitz（PyMuPDF）擷取PDF文字 &圖片
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
-import re, os
+import re, os, tempfile, requests, logging
 import statistics
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# 待改：可選擇是否清除零碎段落
+def get_paragraph_list_from_pdf(pdf_file_url):
+    # 使用临时文件夹，每个线程都有一个独立的临时文件夹
+    with tempfile.TemporaryDirectory() as temp_folder_path:
+        # 透过url取得报告PDF文件
+        response = requests.get(pdf_file_url)
+        # 将下载的 PDF 文件保存到本地
+        if response.status_code == 200:
+            temp_file_path = os.path.join(temp_folder_path, "temp_pdf_file.pdf")
+            with open(temp_file_path, 'wb') as file:
+                file.write(response.content)
+            # 從PDF中提取出主要段落
+            paragraph_list = _get_cleaned_paragraph_list_from_pdf(temp_file_path)
+            return paragraph_list
+        
+        else:
+            logging.warning(f"[SERVER][PDF][Error {response.status_code}]")
+            return []
 
 def _extract_raw_text_from_pdf(file_path):
     raw_text = ""
@@ -51,7 +73,7 @@ def _extract_paragraph_list(text, show_deleted_part=False):
     
     return paragraph_list
 
-def get_cleaned_paragraph_list_from_pdf(file_path):
+def _get_cleaned_paragraph_list_from_pdf(file_path):
     raw_text = _extract_raw_text_from_pdf(file_path)
     cleaned_text = _clean_raw_text(raw_text)
     paragraph_list = _extract_paragraph_list(cleaned_text)
@@ -87,25 +109,25 @@ def extract_images_from_pdf(pdf_path, output_folder):
     
     print(f"提取完成，图片保存在文件夹: {output_folder}")
 
-# 計算被刪除的字數 & 節省的成本
-def show_filtered_paragraph_part(raw_text, paragraph_list):
-    print("original word num: ", len(raw_text))
-    print("remain word num: ", len("\n".join(paragraph_list)))
-    print("retention ratio: ", round(100 * len("\n".join(paragraph_list)) / len(raw_text),2))
-    print("expense: ", cal_GPT_API_expense(text="\n".join(paragraph_list), model="gpt-4o"))
-    print("\n")
+# # 計算被刪除的字數 & 節省的成本
+# def show_filtered_paragraph_part(raw_text, paragraph_list):
+#     print("original word num: ", len(raw_text))
+#     print("remain word num: ", len("\n".join(paragraph_list)))
+#     print("retention ratio: ", round(100 * len("\n".join(paragraph_list)) / len(raw_text),2))
+#     print("expense: ", cal_GPT_API_expense(text="\n".join(paragraph_list), model="gpt-4o"))
+#     print("\n")
     
-if __name__ == "main":
-    from PIL import Image
-    # 打开JPEG图像
-    image_path = '/Users/yahoo168/Desktop/pdf_output/page_31_img_3.jpeg'
-    image = Image.open(image_path)
+# if __name__ == "main":
+#     from PIL import Image
+#     # 打开JPEG图像
+#     image_path = '/Users/yahoo168/Desktop/pdf_output/page_31_img_3.jpeg'
+#     image = Image.open(image_path)
 
-    # 获取图像的尺寸（宽度和高度）
-    width, height = image.size
-    print(width)
-    print(height)
-    # 计算像素数量
-    pixel_count = width * height
+#     # 获取图像的尺寸（宽度和高度）
+#     width, height = image.size
+#     print(width)
+#     print(height)
+#     # 计算像素数量
+#     pixel_count = width * height
 
-    print(f'图像的像素数量: {pixel_count}')
+#     print(f'图像的像素数量: {pixel_count}')
