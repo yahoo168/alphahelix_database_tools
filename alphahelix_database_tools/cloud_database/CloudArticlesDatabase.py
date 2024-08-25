@@ -3,6 +3,9 @@ from datetime import datetime
 import json
 
 from pymongo import DESCENDING
+from jinja2 import Template #type: ignore
+
+from .config.notification_template import _all_notification_template_dict
 
 from alphahelix_database_tools.external_tools.news_tools import *
 from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API
@@ -310,18 +313,39 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 for issue, issue_content in extracted_info_data_dict["issue_content_dict"].items()
             ]
 
+            # 標識為已處理
+            self.MDB_client["raw_content"]["raw_stock_report_non_auto"].update_one(
+                {"_id": stock_report_id}, {"$set": {"is_processed": True}}
+            )
+            
             # 更新stock_report_meta的內容
             stock_report_meta.update({
                 "summary": extracted_info_data_dict["report_summary"],
                 "issue_summary": issue_summary_list,
                 "processed_timestamp": datetime.now()
             })
-
+            
             # 保存處理後的stock report meta到MongoDB
-            self.MDB_client["preprocessed_content"]["stock_report"].insert_one(stock_report_meta)
-            self.MDB_client["raw_content"]["raw_stock_report_non_auto"].update_one(
-                {"_id": stock_report_id}, {"$set": {"is_processed": True}}
-            )
+            result = self.MDB_client["preprocessed_content"]["stock_report"].insert_one(stock_report_meta)
+            
+            # 寄送用戶通知，获取插入后的 _id
+            report_id = result.inserted_id
+            following_user_id_list = self.MDB_client["pool_list"]["ticker_info"].find_one({"ticker": ticker}, {"following_users": 1, "_id": 0})["following_users"]
+
+            # 用於render通知模板的變數字典
+            variables_dict = {
+                    "ticker": ticker,
+                    # _external=True 参数确保生成的是绝对 URL
+                    "report_page_url": f"/main/report_summary_page/{report_id}",
+                }
+
+            self.create_notification(user_id_list=following_user_id_list, 
+                                     priority=2,
+                                     notification_type="update", # "system"、"update"、"todo" 或 "alert"。
+                                     notification_sub_type="stock_report_update",
+                                     variables_dict=variables_dict)
+            
+            
     
     # 根據與特定個股相關的報告，製作看多/看空的論點摘要，可設定最大報告數量
     def save_stock_report_review(self, ticker, review_report_nums=10):
@@ -592,3 +616,32 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 "assumption_review": assumption_review_text,
             }
         )
+    
+    def create_notification(self, user_id_list, priority, notification_type, notification_sub_type, variables_dict=None, meta_data_dict=None):
+        # If using a mutable default in paramenter({}), it can lead to unexpected behavior if the function is called multiple times
+        if meta_data_dict is None:
+            meta_data_dict = {}
+
+        template_dict = _all_notification_template_dict.get(notification_type, {}).get(notification_sub_type, '')    
+        rendered_title = Template(template_dict.get("title", '')).render(**variables_dict)
+        rendered_message = Template(template_dict.get("message", '')).render(**variables_dict)
+        
+        notifications = []
+        for user_id in user_id_list:
+            notification_meta = {
+                "user_id": user_id,
+                "type": notification_type,
+                "sub_type": notification_sub_type,
+                "priority": priority,
+                "title": rendered_title,
+                "message": rendered_message,
+                "upload_timestamp": datetime.now(),
+                "is_read": False,
+                "is_displayed": False,
+                "meta_data": meta_data_dict
+            }
+            notifications.append(notification_meta)
+
+        # Perform a bulk insert for efficiency
+        if notifications:
+            self.MDB_client["users"]["notifications"].insert_many(notifications)
