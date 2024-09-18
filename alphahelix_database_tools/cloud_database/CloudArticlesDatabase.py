@@ -5,9 +5,9 @@ import json
 from pymongo import DESCENDING
 from jinja2 import Template #type: ignore
 
-# from .config.notification_template import _all_notification_template_dict
+from .config.notification_template import _all_notification_template_dict
 # 避免採用相對導入，在雲端伺服器容易報錯
-from alphahelix_database_tools.cloud_database.config.notification_template import _all_notification_template_dict
+# from alphahelix_database_tools.cloud_database.config.notification_template import _all_notification_template_dict
 
 from alphahelix_database_tools.external_tools.news_tools import *
 from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API
