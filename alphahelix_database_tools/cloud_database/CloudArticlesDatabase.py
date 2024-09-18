@@ -128,7 +128,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                     )
             
             prompt += "\n".join(shorts_content_list)
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="text")
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
         
         # 若不預設區間，則固定取最新一日內的raw shorts
         def get_raw_shorts_df(ticker, start_date=None, end_date=datetime.now()):
@@ -223,7 +223,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                     f"markdown的段落標題統一使用'###'表示，段落內文不要有任何符號 \n")
             
             prompt += f"研究報告內容:\n{'n'.join(paragraph_list)}\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
 
         def _creat_issue_following_summary(paragraph_list, ticker, issue_list, word_number, output_format="json_object"):
             prompt = (f"以下是一篇與「股票代號為{ticker}的公司」有關的研究報告，"
@@ -231,7 +231,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"'issue':「{', '.join(issue_list)}」\n"
             prompt += f"格式請確保返回的 JSON 格式中只有以下key：{', '.join(issue_list)}, value則為對應的issue段落短文）\n"
             prompt += f"研究報告內容:\n{'\n'.join(paragraph_list)}\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
         
         # 初始化結果字典（避免出現key error）
         result_data_dict = {
@@ -356,7 +356,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"除了上述的部分外，不要有任何其他內容\n\n"
             prompt += f"研究報告內容:\n{'\n'.join(summary_list)}\n"
             
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
 
         def _adjust_stock_report_review_format(summary_text, ticker, output_format="text"):
             prompt = (f"以下是一些「股票代號為{ticker}的公司」近期的研究結論，"
@@ -364,7 +364,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"回傳格式：每個論點以換行符('\n')分隔，論點前面不需要數字編號"
             prompt += f"除了上述的部分外，不要有任何其他內容\n\n"
             prompt += f"研究報告內容:\n{'\n'.join(summary_text)}\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
              
         # 將json格式的看多/看空論點解析成list
         def _parse_outlook_argument(argument_text):
@@ -378,7 +378,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"回傳格式：以markdown語法顯示，段落標題為「新增的部分」與「減少的部分」，格式使用### \n"
             prompt += f"舊的論點: {old_argument}\n\n"
             prompt += f"新的論點: {new_argument}\n\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="text")
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
             
         # 取得自上次總結後，新上傳報告的meta data，預設為最新的10篇
         # 查找stock_report_review中data_timestamp字段的最大值
@@ -441,7 +441,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt =  f"根據以下的市場看法，列出共識與差異點\n"
             prompt += f"不要使用Markdown語法會出現的符號，純文字即可。不要有其他內容，如系統回覆、問候語等。\n"
             prompt += f"市場看法: {issue_review_text}\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
 
         # 調用LLM，將新的問題總結與舊的問題總結進行比較，找出差異
         def _get_issue_review_change_text_LLM(new_issue_review, old_issue_review, output_format="text"):
@@ -450,7 +450,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"新的論述: {new_issue_review}\n"
             prompt += f"舊的論述: {old_issue_review}\n"
             
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
                 # 針對每個問題，調用LLM，生成問題總結
         
         issue_meta = self.MDB_client["users"]["following_issues"].find_one({"_id": issue_id})
@@ -518,7 +518,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             prompt += f"須註明看法的來源與日期，若沒有相關的論點，可返回''，不用另外搜尋，除了上述的部分外，不要有任何其他內容\n"
             prompt += f"回傳格式：不要使用markdown語法會出現的符號，使用純文字即可"
             prompt += f"研究報告內容:\n {issue_content_json}"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format=output_format)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
         
         # 將自MongoDB取得的issue資料進行整理，改為適合GPT解析的格式，dict (source: content)
         def _generate_issue_json_string(stock_report_meta_list):
@@ -601,7 +601,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 issue_review_text = issue_review["added_issue_review"]
                 prompt += f"市場資訊： {issue}\n{issue_review_text}\n\n"
 
-        assumption_review_text = call_OpenAI_API(API_key=self.OpenAI_API_key, promt=prompt, model_version="gpt-4o", output_format="text")
+        assumption_review_text = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
         risk_score, assumption_review_text = _get_risk_score(text=assumption_review_text)
         
         # 存入MongoDB

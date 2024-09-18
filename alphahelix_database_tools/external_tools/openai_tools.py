@@ -2,17 +2,17 @@ from openai import OpenAI # type: ignore
 import tiktoken
 
 # 待改：multi-thread
-def call_OpenAI_API(API_key, promt, model_version="gpt-4o", output_format="text"):
+def call_OpenAI_API(API_key, prompt, model_version="gpt-4o", output_format="text"):
     client = OpenAI(api_key= API_key)
     chat_completion = client.chat.completions.create(
         messages = [
             {
                 "role": "user",
-                "content": promt,
+                "content": prompt,
             }
         ],
         model = model_version,
-        response_format={ "type": output_format}
+        response_format={"type": output_format}
     )
     return chat_completion.choices[0].message.content
 
