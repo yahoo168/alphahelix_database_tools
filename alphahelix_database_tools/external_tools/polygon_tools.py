@@ -1,6 +1,6 @@
 import requests
 import os, logging, time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Thread
 import pandas as pd
 
@@ -221,7 +221,6 @@ def save_stock_financialReport_data_from_Polygon(API_key, date_list):
 
     return data_dict
 
-
 def save_stock_universe_ticker_from_polygon(API_key, universe_name, date_list):    
     # 轉為polygon的URL辨識碼
     if universe_name=="univ_us_stock":
@@ -335,6 +334,56 @@ def save_stock_market_status_from_Polygon(API_key):
     market_status_series = market_status_series.fillna(1)
     return market_status_series
 
+def save_stock_news_from_Polygon(API_key, ticker, start_timestamp=None):
+    url = f"https://api.polygon.io/v2/reference/news?ticker={ticker}&limit=1000&apiKey={API_key}"
+    if start_timestamp is not None:
+        url += f"&published_utc.gt={start_timestamp.isoformat()}"
+    
+    response = requests.get(url)
+    data_dict = response.json()
+    raw_news_meta_list = []
+
+    if data_dict.get("status") == "OK":
+        raw_news_meta_list += data_dict.get("results", [])
+        
+        next_url = data_dict.get("next_url", None)
+        
+        page_count = 1
+        while next_url:
+            page_count += 1
+            print(f"Page {page_count}")
+            response = requests.get(next_url + f"&apiKey={API_key}")
+            data_dict = response.json()
+            
+            if data_dict.get("status") != "OK":
+                print(f"Error: {data_dict.get('status', 'Unknown error')}")
+                break
+            
+            raw_news_meta_list += data_dict.get("results", [])
+            next_url = data_dict.get("next_url", None)
+
+    news_meta_list = list()
+    for raw_news_meta in raw_news_meta_list:
+        
+        news_meta = {
+                        # 日期格式範例：'2024-05-01T11:25:57Z'，為UTC時間
+                        "data_timestamp": datetime.strptime(raw_news_meta["published_utc"], '%Y-%m-%dT%H:%M:%SZ'), 
+                        # 紀錄更新時間（UTC時間）
+                        "updated_timestamp": datetime.now(timezone.utc),
+                        "title": raw_news_meta.get("title", ''), 
+                        "content": raw_news_meta.get("description", ''),
+                        # 記錄用於搜尋的ticker，以供下次搜尋前判斷前一次搜尋的新聞日期
+                        # 因polygon新聞搜尋較廣泛，若先針對A ticker搜尋新聞，tickers會有多個ticker，若再針對B ticker搜尋新聞，查找tickers判斷最新的日期會失準，導致B的新聞很少
+                        "search_ticker": [ticker],
+                        "tickers": raw_news_meta.get("tickers", []),
+                        "url": raw_news_meta.get("article_url", ''),
+                        "source": raw_news_meta.get("publisher", {}).get("name", ''),
+                        "data_source": "polygon_io",
+                    }
+
+        news_meta_list.append(news_meta)
+    
+    return news_meta_list
 
 # 自Polygon下載財報資料 - 主程式（待改：S/D問題）
 # def save_stock_financialReport_from_Polygon(folder_path, ticker_list, start_date, end_date):

@@ -29,3 +29,15 @@ def reverse_standardized_dict(standardized_dict, reverse_key_mapping):
         original_key = reverse_key_mapping.get(standardized_key, standardized_key)
         original_dict[original_key] = value
     return original_dict
+
+def remove_duplicates_by_key(dict_list, key):
+    seen_values = set()
+    unique_dict_list = []
+    
+    for d in dict_list:
+        value = d.get(key)
+        if value not in seen_values:
+            unique_dict_list.append(d)
+            seen_values.add(value)
+    
+    return unique_dict_list

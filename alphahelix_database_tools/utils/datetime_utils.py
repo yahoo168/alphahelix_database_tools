@@ -14,6 +14,8 @@ def str2datetime(strdate, _timezone=False):
     return datetime_obj
 
 def datetime2str(date):
+    if date is None:
+        return None
     return date.strftime("%Y-%m-%d")
 
 # 將本日的日期以字串形式表達，方便調用

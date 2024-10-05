@@ -13,6 +13,38 @@ from googleapiclient.discovery import build
 
 from alphahelix_database_tools.utils import str2datetime, str2unix_timestamp
 
+### news API 測試
+def get_stock_news_from_news_API(API_key, ticker, start_timestamp=None):
+    if start_timestamp:
+        url = f"https://newsapi.org/v2/everything?q={ticker}&language=en&zh&apiKey={API_key}&from={start_timestamp.isoformat()}"
+    else:
+        url = f"https://newsapi.org/v2/everything?q={ticker}&language=en&zh&apiKey={API_key}"
+    
+    res = requests.get(url).json()
+    if res["status"] == "error":
+        print(f"Error: {res['code']} - {res['message']}")
+        return pd.DataFrame()
+    
+    raw_news_meta_list = res["articles"]
+    
+    news_meta_list = list()
+    for raw_news_meta in raw_news_meta_list:
+        news_meta = {
+                    # 日期格式範例：'2024-05-01T11:25:57Z'，為UTC時間
+                    "data_timestamp": datetime.strptime(raw_news_meta["publishedAt"], '%Y-%m-%dT%H:%M:%SZ'), 
+                    # 紀錄更新時間（UTC時間）
+                    "updated_timestamp": datetime.now(timezone.utc),
+                    "title": raw_news_meta["title"], 
+                    "content": raw_news_meta["content"],
+                    "tickers": [ticker],
+                    "url": raw_news_meta["url"],
+                    "source": raw_news_meta["source"].get("name", ''),
+                    "data_source": "News_API",
+                }
+
+        news_meta_list.append(news_meta)
+    return news_meta_list
+
 # 用途 : 抓取seakingalpha的個股分析（analysis）
 def get_stock_report_from_seekingalpha(API_key, ticker, start_date=None, size=40):
     url = "https://seeking-alpha.p.rapidapi.com/analysis/v2/list"
@@ -95,32 +127,6 @@ def get_stock_news_from_seekingalpha(API_key, ticker, start_date=None, size=40):
         
     return pd.DataFrame(article_meta_list)
 
-### news API 測試
-def get_stock_news_from_news_API(API_key, ticker):
-    url = f"https://newsapi.org/v2/everything?q={ticker}&language=en&zh&apiKey={API_key}"
-    res = requests.get(url)
-    raw_data_list = res.json()["articles"]
-
-    article_meta_list = list()
-    for data_dict in raw_data_list:
-        # 日期格式範例：'2024-05-01T11:25:57Z'，原先沒有時區資訊，補上預設時區
-        date_str = data_dict["publishedAt"]
-        date_datetime = datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%SZ')
-        # 轉換為台北時間（UTC+8）後，移除附帶的時區資訊
-        date_datetime = date_datetime.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
-
-        article_meta = {"date": date_datetime,
-                        "title": data_dict["title"], 
-                        "url": data_dict["url"],
-                        "ticker": ticker,
-                        "source": data_dict["source"]["name"],
-                    }
-
-        article_meta_list.append(article_meta)
-    
-    df = pd.DataFrame(article_meta_list)
-    return df.sort_values(by="date")
-
 """
 用途 : 抓reuters的文章
 輸入 : 輸入(keyword)需為公司名，股號無法查詢
@@ -176,7 +182,7 @@ class GMAIL_NEWS_SCRAP():
 
     def _get_raw_mail_list_by_label(self, start_date, label="BBG_news"):
         if isinstance(start_date, str):
-            start_date = str2datetime(start_date)
+            start_date = str2datetime(start_date).astimezone(timezone.utc)
             
         # 將指定的日期和時間轉換為Unix時間戳記格式
         query_timestamp = int(time.mktime(start_date.timetuple()))
@@ -242,8 +248,8 @@ class GMAIL_NEWS_SCRAP():
             msg_body = self._get_message_body(msg["payload"])
             # 轉換日期格式（原格式為'Wed, 22 May 2024 16:06:38 -0000'）
             date_datetime = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z")
-            # 轉換為台北時間（UTC+8）後，移除附帶的時區資訊
-            date_datetime = date_datetime.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+            # 轉換為UTC時間後，移除附帶的時區資訊
+            date_datetime = date_datetime.astimezone(timezone.utc).replace(tzinfo=None)
             # 取出內文中的ticker（可能有多個），find_all可返回多個
             US_ticker_list = US_ticker_re_pattern.findall(msg_body)
             non_US_ticker_list = non_US_ticker_pattern.findall(msg_body)

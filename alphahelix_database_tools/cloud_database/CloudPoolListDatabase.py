@@ -39,6 +39,34 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
         username_to_id_mapping_dict = mapping_df.to_dict()
         return username_to_id_mapping_dict
     
+    def get_active_user_id_list(self):
+        user_info_meta_list = list(self.MDB_client["users"]["user_basic_info"].find({"is_active": True}, {"_id": 1}))
+        user_id_list = [doc["_id"] for doc in user_info_meta_list]
+        return user_id_list
+    
+    # 使得ticker的追蹤者與「投資議題」、「投資假設」的追蹤者保持一致
+    def align_ticker_following_users(self):
+        # 取得所有 tickers
+        ticker_list = [doc["ticker"] for doc in self.MDB_client["research_admin"]["ticker_info"].find({}, {"ticker": 1, "_id": 0})]
+
+        # 需要更新的 collections
+        collection_list = ["following_issues", "investment_assumptions"]
+
+        # 遍歷所有 tickers
+        for ticker in ticker_list:
+            # 取得 ticker 對應的 following_users 列表
+            following_user_id_list = self.MDB_client["research_admin"]["ticker_info"].find_one(
+                {"ticker": ticker}, {"following_users": 1, "_id": 0}
+            )["following_users"]
+
+            # 遍歷 collections 並更新對應的 documents
+            for collection in collection_list:
+                self.MDB_client["users"][collection].update_many(
+                    {"tickers": ticker},
+                    {"$addToSet": {"following_users": {"$each": following_user_id_list}}} # 使用 $addToSet 避免重複加入
+                )
+        logging.info("[SERVER][DATA] All tickers following aligned successfully!")
+    
     def update_ticker_info(self, editor_id, ticker, update_data_dict):
         current_timestamp = datetime.now()
         update_operation_list = []
@@ -197,28 +225,42 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
         return list(self.MDB_client["research_admin"]["internal_investment_report"].find(query))
     
     def get_market_report_upload_record(self, monitor_period_days=30):
+        monitor_period_days = 30
         collection = self.MDB_client["raw_content"]["raw_stock_report_non_auto"]
-        # 计算时间戳，获取近30天的数据
+
+        # 计算时间戳，获取近 monitor_period_days 天的数据
         start_timestamp = datetime.now(timezone.utc) - timedelta(days=monitor_period_days)
-        # 查找近30天上传的报告
-        doc_meta_list = list(collection.find({"upload_timestamp": {"$gte": start_timestamp}}))
-        # 初始化一个字典，用于存储统计结果
-        record_stats_dict = defaultdict(lambda: {'upload_count': 0, 'latest_upload_timestamp': None, 'uploaders': set()})
 
-        # 遍历每个文档
-        for doc_meta in doc_meta_list:
-            ticker = doc_meta.get('ticker')
-            upload_timestamp = doc_meta.get('upload_timestamp')
-            uploader_id = doc_meta.get('uploader_id')
+        # 使用 MongoDB 的聚合操作来直接获取每个 (ticker, source) 下的最大 upload_timestamp 和 data_timestamp
+        pipeline = [
+            {"$match": {"upload_timestamp": {"$gte": start_timestamp}}},
+            {"$group": {
+                "_id": {"ticker": "$ticker", "source": "$source"},
+                "ticker": {"$first": "$ticker"},
+                "source": {"$first": "$source"},
+                # 将 upload_timestamp 和 uploader_id 按顺序存储在数组中
+                "upload_timestamps": {"$push": "$upload_timestamp"},
+                "data_timestamps": {"$push": "$data_timestamp"},
+                "uploader_ids": {"$push": "$uploader_id"},
+                "upload_count": {"$sum": 1}
+            }},
+            # 使用 $project 进行数组操作，找到最大 upload_timestamp 对应的 uploader_id
+            {"$project": {
+                "ticker": 1,
+                "source": 1,
+                "upload_timestamp": {"$max": "$upload_timestamps"},
+                "data_timestamp": {"$max": "$data_timestamps"},
+                # 找到最大 upload_timestamp 对应的索引
+                "max_timestamp_index": {"$indexOfArray": ["$upload_timestamps", {"$max": "$upload_timestamps"}]},
+                # 获取对应最大 upload_timestamp 的 uploader_id
+                "uploader_id": {"$arrayElemAt": ["$uploader_ids", {"$indexOfArray": ["$upload_timestamps", {"$max": "$upload_timestamps"}]}]},
+                "upload_count": 1
+            }},
+            {"$sort": {"upload_timestamp": -1}}
+        ]
 
-            if ticker:
-                # 更新上传次数
-                record_stats_dict[ticker]['upload_count'] += 1
-                # 更新最新上传日期
-                if not record_stats_dict[ticker]['latest_upload_timestamp'] or upload_timestamp > record_stats_dict[ticker]['latest_upload_timestamp']:
-                    record_stats_dict[ticker]['latest_upload_timestamp'] = upload_timestamp
+        # 执行聚合查询
+        record_stats_list = list(collection.aggregate(pipeline))
+        
+        return record_stats_list
 
-                # 更新上传者列表
-                record_stats_dict[ticker]['uploaders'].add(str(uploader_id))  # 将ObjectId转成字符串保存
-
-        return record_stats_dict
