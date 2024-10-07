@@ -2,7 +2,7 @@ from setuptools import setup, find_packages #type: ignore
 
 setup(
     name='alphahelix_database_tools',
-    version='1.0.7',
+    version='1.0.8',
     author='Jeff Chen',
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
@@ -48,6 +48,7 @@ setup(
         "jupyter_client==8.6.2",
         "jupyter_core==5.7.2",
         "matplotlib-inline==0.1.7",
+        "matplotlib==3.9.2",
         "nest-asyncio==1.6.0",
         "nltk==3.8.1",
         "numpy==2.0.0",
@@ -69,6 +70,7 @@ setup(
         "pydantic==2.7.4",
         "pydantic_core==2.18.4",
         "pymongo==4.7.3",
+        "python-dotenv==1.0.1",
         "Pygments==2.18.0",
         "PyMuPDF==1.24.5",
         "PyMuPDFb==1.24.3",
