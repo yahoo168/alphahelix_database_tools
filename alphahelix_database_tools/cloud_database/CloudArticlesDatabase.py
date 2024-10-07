@@ -58,7 +58,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             self.save_stock_news_summary(ticker)
         
         # 取得所有用戶id列表
-        user_id_list = self.get_active_user_id_list()
+        #user_id_list = self.pool_list_db.get_active_user_id_list()
         # 測試用：只寄送給特定用戶
         user_id_list = [ObjectId("66601790f20eb424a340acd3")]
         
@@ -798,11 +798,8 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             }
         )
     
-    def create_notification(self, user_id_list, priority, notification_type, notification_sub_type, variables_dict=None, meta_data_dict=None):
-        # If using a mutable default in paramenter({}), it can lead to unexpected behavior if the function is called multiple times
-        if meta_data_dict is None:
-            meta_data_dict = {}
-        
+    # "system"、"update"、"todo" 或 "alert"。
+    def create_notification(self, user_id_list, priority, notification_type, notification_sub_type, variables_dict=None):
         # 依照通知類型（包含主類型與sub類型），取得通知模板
         template_dict = _all_notification_template_dict.get(notification_type, {}).get(notification_sub_type, {})
         if not template_dict:
@@ -825,7 +822,6 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 "upload_timestamp": datetime.now(timezone.utc),
                 "is_read": False,
                 "is_displayed": False,
-                "meta_data": meta_data_dict
             }
             notifications.append(notification_meta)
 
