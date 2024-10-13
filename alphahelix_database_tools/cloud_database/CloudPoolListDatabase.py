@@ -44,6 +44,33 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
         user_id_list = [doc["_id"] for doc in user_info_meta_list]
         return user_id_list
     
+    def get_user_viewed_reports(self, user_id):
+        result = self.MDB_client["preprocessed_content"]["stock_report"].find(
+            { 
+                "view_by": {
+                    "$elemMatch": { "user_id": ObjectId(user_id) }  # 查找 view_by 陣列中的字典，其 user_id 匹配
+                }
+            },
+            projection={"_id": 1, "title": 1})
+        return list(result)
+
+    def get_user_meta_by_roles(self, role_list):
+        user_meta_list = list(self.MDB_client["users"]["user_basic_info"].find({"is_active": True,
+                                                        "roles": {"$in": role_list}}))
+        return user_meta_list
+
+    # 強制研究員須在系統追蹤其負責研究的ticker
+    def auto_follow_tickers_for_researchers(self):
+        specified_role_list = ["investment_manager", "investment_researcher", "investment_intern"]
+        user_meta_list = self.get_user_meta_by_roles(role_list=specified_role_list)
+        for user_meta in user_meta_list:
+            user_id = user_meta["_id"]
+            responsible_ticker_list = self.get_responsible_ticker_list(user_id=user_id)
+            if responsible_ticker_list:
+                for ticker in responsible_ticker_list:
+                    logging.info(f"[SERVER][Auto-Follow-Ticker]{user_meta["username"]}->{ticker}")
+                    self.MDB_client["research_admin"]["ticker_info"].update_one({"ticker": ticker}, {"$addToSet": {"following_users": user_id}}, upsert=False)
+        
     # 使得ticker的追蹤者與「投資議題」、「投資假設」的追蹤者保持一致
     def align_ticker_following_users(self):
         # 取得所有 tickers
@@ -67,6 +94,24 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
                 )
         logging.info("[SERVER][DATA] All tickers following aligned successfully!")
     
+    # 找出特定用戶負責的tickers
+    def get_responsible_ticker_list(self, user_id):
+        ticker_info_meta_list = self.get_latest_ticker_info_meta_list()
+        ticker_info_meta_df = pd.DataFrame(ticker_info_meta_list)
+        # 使用 apply 方法來篩選符合的行
+        responsible_ticker_series = ticker_info_meta_df[ticker_info_meta_df["researchers"].apply(lambda x: x.get("researcher_id") == user_id)]["ticker"]
+        # 顯示符合條件的 ticker 列表
+        responsible_ticker_list = sorted(responsible_ticker_series.tolist())
+        return responsible_ticker_list
+
+    # 找出特定用戶追蹤的tickers
+    def get_following_ticker_list(self, user_id):
+        # 若user_id為str，則轉換為ObjectId，若為ObjectId則不變（不會報錯）
+        ticker_meta_list = list(self.MDB_client["research_admin"]["ticker_info"].find({"following_users": ObjectId(user_id)}))
+        ticker_list = [ticker_meta["ticker"] for ticker_meta in ticker_meta_list]
+        ticker_list.sort()
+        return ticker_list
+
     def update_ticker_info(self, editor_id, ticker, update_data_dict):
         current_timestamp = datetime.now()
         update_operation_list = []

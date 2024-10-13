@@ -120,7 +120,7 @@ class AbstractCloudDatabase():
         if upsert == True:
             # 提取data_list中的日期
             key_list = [data[key] for data in data_list]
-            # 查找集合中與 date_list 中日期重叠的doc，僅返回_id字段
+            # 查找集合中與date_list中z指定字段重複的doc，僅返回_id字段
             overlapped_documents_list = list(self.cur_col.find(filter={key: {"$in": key_list}}, projection={"_id":1}))
             # 如果存在重叠的doc
             if overlapped_documents_list:

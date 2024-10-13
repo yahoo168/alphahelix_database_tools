@@ -57,8 +57,8 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             self.save_stock_news(ticker, source="polygon_io")
             self.save_stock_news_summary(ticker)
         
-        # 取得所有用戶id列表
-        #user_id_list = self.pool_list_db.get_active_user_id_list()
+        # # 取得所有用戶id列表
+        # user_id_list = self.pool_list_db.get_active_user_id_list()
         # 測試用：只寄送給特定用戶
         user_id_list = [ObjectId("66601790f20eb424a340acd3")]
         
@@ -97,7 +97,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         if len(news_meta_list) > 0:
             mongdoDB_collection.insert_many(news_meta_list)
 
-    def save_shorts(self, start_date=None, source="BBG_news"):
+    def save_shorts(self, start_date=None):
         if start_date == None:
             start_date = self.get_latest_data_date(item="raw_shorts")
 
@@ -315,10 +315,10 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
     # 使用LLM抽取報告摘要（全文摘要 & 追蹤問題摘要）
     def _extract_info_from_document(self, ticker, pdf_file_url, issue_list=[], extract_summary=True, extract_issue_summary=True):
         def _creat_stock_report_summary(paragraph_list, ticker, output_format="text"):
-            prompt = (f"以下是一篇「股票代號為{ticker}的公司」的研究報告，"
-                    f"請以markdown的語法來整理這份報告，包括'全文摘要', '看多論點', '看空論點'三個段落，並翻譯為中文，"
-                    f"回傳格式：全文僅包括'全文摘要', '看多論點', '看空論點'三個段落，不要有任何其他內容。"
-                    f"markdown的段落標題統一使用'###'表示，段落內文不要有任何符號 \n")
+            prompt = (f"以下是一篇「股票代號為{ticker}的公司」的研究報告，請整理這份報告的內容。\n"
+                    f"包括'全文摘要', '看多論點', '看空論點'三個段落，並翻譯為繁體中文。回傳的格式應該只有以下三個段落：\n"
+                    f"'全文摘要'、'看多論點'、'看空論點'\n"
+                    f"段落內文應該完整呈現，不要使用任何符號或特別標註。\n")
             
             prompt += f"研究報告內容:\n{'n'.join(paragraph_list)}\n"
             return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
@@ -384,14 +384,18 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         logging.info(f"[SERVER][Data Process][共{stock_report_num}篇non auto stock report待處理]")
 
         for index, stock_report_meta in enumerate(stock_report_meta_list):
-            stock_report_id, ticker, pdf_file_url = stock_report_meta["_id"], stock_report_meta["ticker"], stock_report_meta["url"]
-            logging.info(f"[SERVER][Data Process][{ticker}][開始處理第{index + 1}/{stock_report_num}篇non auto stock report]")
+            stock_report_id, title, ticker_list, pdf_file_url = stock_report_meta["_id"], stock_report_meta["title"], stock_report_meta["tickers"], stock_report_meta["url"]
+            logging.info(f"[SERVER][Data Process][{title}][開始處理第{index + 1}/{stock_report_num}篇non auto stock report]")
 
             # 取出與該標的相關的active issue（預設最多10個）
-            stock_following_issue_meta_list = list(self.MDB_client["users"]["following_issues"].find({"tickers": ticker, "is_active": True}, limit=10))
+            stock_following_issue_meta_list = list(self.MDB_client["users"]["following_issues"].find({"tickers": {"$in": ticker_list}, "is_active": True}, limit=10))
             # 建立issue與issue_id的對應字典（因後續由LLM進行處理，返回的issue為str，須透過issue_id確認對應的資料庫物件
             issue_id_mapping = {item_meta['issue']: item_meta['_id'] for item_meta in stock_following_issue_meta_list}
             stock_following_issue_list = list(issue_id_mapping.keys())
+            
+            # 待改：取出第一個ticker（若有多個ticker，僅取第一個）
+            ticker = ticker_list[0]
+            
             # 將文件由LLM進行抽取（全文摘要 / 追蹤問題摘要）
             extracted_info_data_dict = self._extract_info_from_document(
                 ticker=ticker, 
@@ -415,7 +419,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                         }
                     issue_summary_list.append(issue_summary_meta)
                 else:
-                    logging.warning(f"[SERVER][Data Process][{ticker}][處理丟失][issue: {issue}][issue_id: {issue_id}]")
+                    logging.warning(f"[SERVER][Data Process][{title}][處理丟失][issue: {issue}][issue_id: {issue_id}]")
 
             # 將原始文件標識為已處理
             self.MDB_client["raw_content"]["raw_stock_report_non_auto"].update_one(
@@ -434,21 +438,24 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             
             # 寄送用戶通知，获取插入后的 _id
             report_id = result.inserted_id
-            following_user_id_list = self.MDB_client["research_admin"]["ticker_info"].find_one({"ticker": ticker}, {"following_users": 1, "_id": 0})["following_users"]
+            ticker_info_meta = self.MDB_client["research_admin"]["ticker_info"].find_one({"ticker": ticker}, {"following_users": 1, "_id": 0})
+            # 有可能ticker_info_meta為None（即上傳的標的沒有在系統建檔）
+            if ticker_info_meta:
+                following_user_id_list = ticker_info_meta.get("following_users", [])
 
-            # 用於render通知模板的變數字典
-            variables_dict = {
-                    "ticker": ticker,
-                    # _external=True 参数确保生成的是绝对 URL
-                    "page_url": f"/main/report_summary_page/{report_id}",
-                    "title": stock_report_meta["title"].split('.')[0],
-                }
+                # 用於render通知模板的變數字典
+                variables_dict = {
+                        "ticker": ticker,
+                        # _external=True 参数确保生成的是绝对 URL
+                        "page_url": f"/main/report_summary_page/{report_id}",
+                        "title": stock_report_meta["title"].split('.')[0],
+                    }
 
-            self.create_notification(user_id_list=following_user_id_list, 
-                                     priority=2,
-                                     notification_type="update", # "system"、"update"、"todo" 或 "alert"。
-                                     notification_sub_type="stock_report_update",
-                                     variables_dict=variables_dict)
+                self.create_notification(user_id_list=following_user_id_list, 
+                                        priority=2,
+                                        notification_type="update", # "system"、"update"、"todo" 或 "alert"。
+                                        notification_sub_type="stock_report_update",
+                                        variables_dict=variables_dict)
             
     
     # 根據與特定個股相關的報告，製作看多/看空的論點摘要，可設定最大報告數量
@@ -540,7 +547,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         }
         self.MDB_client["published_content"]["stock_report_review"].insert_one(stock_report_review_meta)
     
-    def save_issue_review(self, issue_id, max_days=90, max_doc_num=30):
+    def save_issue_review(self, issue_id, max_days=90, max_doc_num=30, end_timestamp=None):
         def _get_issue_concensus_and_dissensus_LLM(issue, issue_review_text):
             prompt = f"根據以下的「市場看法」，具體整理出市場對「{issue}」議題的共識與差異點。\n"
             prompt += f"請將市場共識和差異分為兩個段落進行整理，每個部分以具體事例和數據進行說明。\n"
@@ -570,11 +577,12 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         # 取得issue的追蹤者id（用於寄送用戶通知） 
         following_user_id_list = issue_meta.get("following_users", [])
         
-        logging.info(f"[SERVER][issue_review][{issue}]")
+        # 設定搜尋文件的時間範圍（預設為從當前回顧N日）
+        if end_timestamp is None:
+            end_timestamp = datetime.now()
         
-        # 設定搜尋文件的時間範圍
-        start_timestamp = datetime.now() - timedelta(days=max_days)
-        end_timestamp = datetime.now()
+        start_timestamp = end_timestamp - timedelta(days=max_days)
+        logging.info(f"[SERVER][issue_review][{issue}][{datetime2str(start_timestamp)} ~ {datetime2str(end_timestamp)}]")
         
         # 取得包含此issue id並且issue_content不為空的stock report
         market_stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find(
@@ -872,7 +880,68 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         news_meta_list = remove_duplicates_by_key(news_meta_list, "url")
         logging.info(f"[SERVER][DATA][NEWS][{ticker}][{data_source}][{start_timestamp_str}][{end_timestamp_str}] 去除重複後，剩餘{len(news_meta_list)}則新聞")
         return news_meta_list        
+    
+    def creat_ticker_event_notification(self, days=7):
+        # 計算時間範圍
+        start_timestamp = datetime.now(timezone.utc)
+        end_timestamp = start_timestamp + timedelta(days=days)
+        start_date_str = datetime2str(start_timestamp)
+        end_date_str = datetime2str(end_timestamp)
+        
+        # 查詢活動元數據列表
+        event_meta_list = list(self.MDB_client["research_admin"]["ticker_event"].find(
+            {
+                "is_deleted": False,
+                "event_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp},
+            }, 
+            sort=[("event_timestamp", 1)]
+        ))
+
+        for event_meta in event_meta_list:
+            event_meta["event_timestamp"] = datetime2str(event_meta["event_timestamp"])
+            event_meta['event_type'].replace('_', ' ').title()
             
+        # 提取不重複的標的代碼
+        event_ticker_list = {event_meta["ticker"] for event_meta in event_meta_list}  # 使用 set() 提高效率
+        event_tickers_str = ', '.join(sorted(event_ticker_list))
+
+        # 測試：只寄送給特定用戶
+        user_id_list = [ObjectId("66601790f20eb424a340acd3")]
+
+        # 逐一處理每個用戶
+        for user_id in user_id_list:
+            following_ticker_list = set(self.pool_list_db.get_following_ticker_list(user_id))
+            responsible_ticker_list = set(self.pool_list_db.get_responsible_ticker_list(user_id))
+
+            # 計算交集，找出關注及負責的標的事件
+            following_event_ticker_list = sorted(following_ticker_list & event_ticker_list)
+            responsible_event_ticker_list = sorted(responsible_ticker_list & event_ticker_list)
+
+            # 字符串處理
+            following_event_tickers_str = ', '.join(following_event_ticker_list)
+            responsible_event_tickers_str = ', '.join(responsible_event_ticker_list)
+
+            # 準備通知模板的變數
+            notification_variables_dict = {
+                "start_date_str": start_date_str,
+                "end_date_str": end_date_str,
+                "event_tickers_str": event_tickers_str,
+                "following_event_ticker_list": following_event_ticker_list,
+                "following_event_tickers_str": following_event_tickers_str,
+                "responsible_event_tickers_str": responsible_event_tickers_str,
+                "event_meta_list": event_meta_list,
+                "page_url": "/main/ticker_event_overview",
+            }
+
+            # 寄送通知
+            self.create_notification(
+                user_id_list=[user_id],  # 單個用戶列表
+                priority=2,
+                notification_type="alert",  # "system"、"update"、"todo" 或 "alert"
+                notification_sub_type="ticker_event_alert",
+                variables_dict=notification_variables_dict
+            )
+
 # def save_stock_reports_auto(self, ticker_list, start_date=None):
     #     if start_date == None:
     #         # MongoDB返回的datetime不帶時區資訊，此處進行轉換，以便與新聞utc對接

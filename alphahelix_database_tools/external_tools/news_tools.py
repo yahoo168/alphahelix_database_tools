@@ -161,7 +161,6 @@ class GMAIL_NEWS_SCRAP():
         self.token_file_path = "/Users/yahoo168/Desktop/gmail_acess/token.json"        
         self._build_service()
 
-
     def _build_service(self):
         # 需要访问的 OAuth 2.0 范围
         SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -182,10 +181,19 @@ class GMAIL_NEWS_SCRAP():
 
     def _get_raw_mail_list_by_label(self, start_date, label="BBG_news"):
         if isinstance(start_date, str):
-            start_date = str2datetime(start_date).astimezone(timezone.utc)
-            
-        # 將指定的日期和時間轉換為Unix時間戳記格式
-        query_timestamp = int(time.mktime(start_date.timetuple()))
+            start_date = str2datetime(start_date)
+        
+        # 確保 start_date 是 UTC 時間
+        if start_date.tzinfo is None:  # 如果沒有時區信息，假設是本地時間，需轉換成UTC
+            start_date = start_date.replace(tzinfo=timezone.utc)
+        else:
+            # 將 start_date 轉換為 UTC 時間
+            start_date = start_date.astimezone(timezone.utc)
+        
+        # 將指定的UTC的日期和時間轉換為Unix時間戳記格式
+        # 在Gmail API的查詢條件中，after:{query_timestamp} 會返回「>=」該時間戳記的信件，而Gmail API並沒有直接提供 ">" 的查詢條件選項，故將timestamp加1秒
+        query_timestamp = int(start_date.timestamp()) + 1
+        
         # 設定查詢條件，只查詢指定時間之後，label為BBG_news的信件
         query = f"after:{query_timestamp} label:{label}"
         # 初始化變數以儲存所有信件
@@ -198,7 +206,6 @@ class GMAIL_NEWS_SCRAP():
             raw_mail = results.get('messages', [])
             # 添加查詢結果到信件列表
             raw_mail_list.extend(raw_mail)
-
             # 檢查是否有下一頁
             page_token = results.get('nextPageToken')
             if not page_token:
@@ -248,7 +255,7 @@ class GMAIL_NEWS_SCRAP():
             msg_body = self._get_message_body(msg["payload"])
             # 轉換日期格式（原格式為'Wed, 22 May 2024 16:06:38 -0000'）
             date_datetime = datetime.strptime(date, "%a, %d %b %Y %H:%M:%S %z")
-            # 轉換為UTC時間後，移除附帶的時區資訊
+            # 轉換為UTC時間後，移除附帶的時區資訊(mongdoe不支援儲存帶時區資訊的datetime)
             date_datetime = date_datetime.astimezone(timezone.utc).replace(tzinfo=None)
             # 取出內文中的ticker（可能有多個），find_all可返回多個
             US_ticker_list = US_ticker_re_pattern.findall(msg_body)
