@@ -24,6 +24,15 @@ class GoogleCloudStorageTools():
             blob = bucket.blob(blob_name)
         return blob
     
+    def get_blob_size(self, bucket_name, blob_name):
+        """取得指定 bucket 中 blob_name 的檔案大小"""
+        blob = self.get_blob(bucket_name, blob_name)
+        if blob.exists():  # 檢查 blob 是否存在
+            return blob.size  # 返回 blob 的大小
+        else:
+            print(f"Blob {blob_name} 不存在於 {bucket_name} bucket 中")
+            return None
+    
     # 指定folder，取得其中的blob列表
     def get_blob_list_in_folder(self, bucket_name, folder_name):
         """Lists all the files in the specified folder in the bucket."""

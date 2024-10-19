@@ -63,14 +63,24 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
     def auto_follow_tickers_for_researchers(self):
         specified_role_list = ["investment_manager", "investment_researcher", "investment_intern"]
         user_meta_list = self.get_user_meta_by_roles(role_list=specified_role_list)
+        
+        all_ticker_list = list()
+        
         for user_meta in user_meta_list:
             user_id = user_meta["_id"]
             responsible_ticker_list = self.get_responsible_ticker_list(user_id=user_id)
             if responsible_ticker_list:
+                all_ticker_list.extend(responsible_ticker_list)
                 for ticker in responsible_ticker_list:
                     logging.info(f"[SERVER][Auto-Follow-Ticker]{user_meta["username"]}->{ticker}")
                     self.MDB_client["research_admin"]["ticker_info"].update_one({"ticker": ticker}, {"$addToSet": {"following_users": user_id}}, upsert=False)
         
+        # 待改：Sean追蹤所有有人追蹤的ticker
+        investment_manager_id = ObjectId("66836e674c7c79d7d6a7aa0e")
+        for ticker in all_ticker_list:
+            self.MDB_client["research_admin"]["ticker_info"].update_one({"ticker": ticker}, {"$addToSet": {"following_users": investment_manager_id}}, upsert=False)
+            logging.info(f"[SERVER][Auto-Follow-Ticker] Sean ->{ticker}")
+            
     # 使得ticker的追蹤者與「投資議題」、「投資假設」的追蹤者保持一致
     def align_ticker_following_users(self):
         # 取得所有 tickers
@@ -107,11 +117,44 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
     # 找出特定用戶追蹤的tickers
     def get_following_ticker_list(self, user_id):
         # 若user_id為str，則轉換為ObjectId，若為ObjectId則不變（不會報錯）
-        ticker_meta_list = list(self.MDB_client["research_admin"]["ticker_info"].find({"following_users": ObjectId(user_id)}))
-        ticker_list = [ticker_meta["ticker"] for ticker_meta in ticker_meta_list]
-        ticker_list.sort()
-        return ticker_list
+        user_meta = self.MDB_client["users"]["user_basic_info"].find_one({"_id": ObjectId(user_id)})
+        if not user_meta:
+            logging.error(f"[SERVER][ERROR] User not found: {user_id}")
+            return []
+        
+        return sorted(user_meta.get("followed_tickers", []))
 
+    def get_ticker_following_user_list(self, ticker):
+        following_users_meta_list = list(self.MDB_client["users"]["user_basic_info"].find({"followed_tickers": ticker}, {"_id": 1}))
+        following_users_id_list = [item["_id"] for item in following_users_meta_list]
+        return following_users_id_list
+    
+    def get_ticker_event_meta_list(self, ticker_list=None, start_timestamp=None, end_timestamp=None):
+        # 建立查詢條件字典，包含 ticker 條件
+        query = {}
+        if ticker_list:
+            query = {"ticker": {"$in": ticker_list}}
+        # 如果有時間範圍，則加入時間條件
+        if start_timestamp or end_timestamp:
+            timestamp_range_dict = {}
+            if start_timestamp:
+                timestamp_range_dict["$gte"] = start_timestamp
+            if end_timestamp:
+                timestamp_range_dict["$lte"] = end_timestamp
+            query["event_timestamp"] = timestamp_range_dict
+        
+        # 待改：目前直接排除earnings_release（因與earnings_call重複）
+        query["event_type"] = {"$ne": "earnings_release"}
+        query["is_deleted"] = False
+        
+        event_meta_list = list(self.MDB_client['research_admin']['ticker_event'].find(query, sort=[("event_timestamp", 1)]))
+        
+        for event_meta in event_meta_list:
+            event_meta["event_date_str"] = datetime2str(event_meta["event_timestamp"])
+            event_meta["event_time_str"] = event_meta["event_timestamp"].strftime('%Y-%m-%d %H:%M')
+        
+        return event_meta_list
+    
     def update_ticker_info(self, editor_id, ticker, update_data_dict):
         current_timestamp = datetime.now()
         update_operation_list = []
@@ -261,13 +304,20 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
             
             return ticker_info_meta_list
     
-    def get_internal_stock_report(self, ticker=None):
+    def get_internal_stock_report_meta_list(self, ticker=None):
         if ticker:
-            query = {"ticker": ticker}
+            query = {"tickers": ticker}
         else:
             query = {}
+        
+        internal_stock_report_meta_list = list(self.MDB_client["research_admin"]["internal_investment_report"].find(query, sort=[("data_timestamp", -1)]))
+
+        id_to_username_mapping_dict = self.get_id_to_username_mapping_dict()
+        for item_meta in internal_stock_report_meta_list:
+            item_meta["data_date_str"] = datetime2str(item_meta["data_timestamp"])
+            item_meta["author"] = id_to_username_mapping_dict[item_meta["upload_info"]["uploader"]].replace("_", " ").title()
             
-        return list(self.MDB_client["research_admin"]["internal_investment_report"].find(query))
+        return internal_stock_report_meta_list
     
     def get_market_report_upload_record(self, monitor_period_days=30):
         monitor_period_days = 30
@@ -278,31 +328,32 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
 
         # 使用 MongoDB 的聚合操作来直接获取每个 (ticker, source) 下的最大 upload_timestamp 和 data_timestamp
         pipeline = [
-            {"$match": {"upload_timestamp": {"$gte": start_timestamp}}},
+            {"$match": {"upload_info.upload_timestamp": {"$gte": start_timestamp}}},
             {"$group": {
-                "_id": {"ticker": "$ticker", "source": "$source"},
-                "ticker": {"$first": "$ticker"},
+                "_id": {"ticker": {"$arrayElemAt": ["$tickers", 0]}, "source": "$source"},
+                "ticker": {"$first": {"$arrayElemAt": ["$tickers", 0]}},
                 "source": {"$first": "$source"},
-                # 将 upload_timestamp 和 uploader_id 按顺序存储在数组中
-                "upload_timestamps": {"$push": "$upload_timestamp"},
+                # 將 upload_timestamp 和 uploader_id 從 upload_info 中提取並按順序存儲在數組中
+                "upload_timestamps": {"$push": "$upload_info.upload_timestamp"},
                 "data_timestamps": {"$push": "$data_timestamp"},
-                "uploader_ids": {"$push": "$uploader_id"},
+                "uploaders": {"$push": "$upload_info.uploader"},
                 "upload_count": {"$sum": 1}
             }},
-            # 使用 $project 进行数组操作，找到最大 upload_timestamp 对应的 uploader_id
+            # 使用 $project 進行數組操作，找到最大 upload_timestamp 對應的 uploader
             {"$project": {
                 "ticker": 1,
                 "source": 1,
                 "upload_timestamp": {"$max": "$upload_timestamps"},
                 "data_timestamp": {"$max": "$data_timestamps"},
-                # 找到最大 upload_timestamp 对应的索引
+                # 找到最大 upload_timestamp 對應的索引
                 "max_timestamp_index": {"$indexOfArray": ["$upload_timestamps", {"$max": "$upload_timestamps"}]},
-                # 获取对应最大 upload_timestamp 的 uploader_id
-                "uploader_id": {"$arrayElemAt": ["$uploader_ids", {"$indexOfArray": ["$upload_timestamps", {"$max": "$upload_timestamps"}]}]},
+                # 獲取對應最大 upload_timestamp 的 uploader
+                "uploader": {"$arrayElemAt": ["$uploaders", {"$indexOfArray": ["$upload_timestamps", {"$max": "$upload_timestamps"}]}]},
                 "upload_count": 1
             }},
             {"$sort": {"upload_timestamp": -1}}
         ]
+
 
         # 执行聚合查询
         record_stats_list = list(collection.aggregate(pipeline))

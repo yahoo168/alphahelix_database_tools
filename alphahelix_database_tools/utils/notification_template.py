@@ -14,10 +14,17 @@ _all_notification_template_dict = {
                     '''
         },
         
+        "transcript_update": {
+          "title": "【財報會議】【{{ticker}}】{{title}}",
+          "message":'''
+                    個股({{ticker}})，有法說會重點摘要更新，請<a href='{{page_url}}' target='_blank'>點擊</a>查看。
+                    '''
+        },
+        
         "investment_issue_review_update": {
           "title": "【投資議題】{{issue}}",
           "message":'''
-                    您追蹤的投資議題 「<a href='{{page_url}}' target='_blank'>{{issue}} </a> 」已更新完成，請點擊查看
+                    您追蹤的投資議題 「<a href='{{page_url}}' target='_blank'>{{issue}} </a> 」已更新完成，請點擊查看。
                     '''
         },
         
@@ -76,7 +83,7 @@ _all_notification_template_dict = {
                             <tr {% if item_meta['ticker'] in following_event_ticker_list %} style="color: red;" {% endif %}>
                                 <td>{{ loop.index }}</td>
                                 <td>{{ item_meta['ticker'] }}</td>
-                                <td>{{ item_meta['event_timestamp'] }}</td>
+                                <td>{{ item_meta['event_time_str'] }}</td>
                                 <td>{{ item_meta['event_title'] }}</td>
                             </tr>
                         {% endfor %}
