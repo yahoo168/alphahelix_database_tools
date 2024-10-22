@@ -1,9 +1,7 @@
 import fitz  # fitz（PyMuPDF）擷取PDF文字 &圖片
 import re, os, tempfile, requests, logging
-import cv2  #type: ignore #opencv-python 
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
-from PIL import Image, ImageFile #type: ignore
 
 # import nltk
 # from nltk.tokenize import sent_tokenize, word_tokenize
@@ -71,95 +69,6 @@ def _extract_raw_text_from_pdf(file_path):
         raw_text += (_text)
     return raw_text
     
-def _extract_images_from_pdf(pdf_file_path, output_folder_path, del_image_folder_path=None, min_size=100 * 1024, max_size=1 * 1024 * 1024, dpi=150, 
-                            segment_threshold=300, binary_threshold=100, kernel_size=10, dilation_iterations=4):
-    # 逐頁提取頁面中的所有圖像
-    def process_page(page_num):
-        with fitz.open(pdf_file_path) as pdf_document:
-            page = pdf_document.load_page(page_num)
-            image_list = page.get_images(full=True)
-            
-            # 1. 處理一般的嵌入式圖像
-            for img_index, img in enumerate(image_list):
-                xref = img[0]
-                base_image = pdf_document.extract_image(xref)
-                image_bytes = base_image["image"]
-                image_ext = base_image["ext"]
-                image_size = len(image_bytes)
-                
-                # 檢查圖像大小，是否在限定的檔案大小範圍內
-                if min_size <= image_size <= max_size:
-                    # 保存圖像
-                    image_filename = f"page_{page_num + 1}_img_{img_index + 1}.{image_ext}"
-                    image_filepath = os.path.join(output_folder_path, image_filename)
-                    with open(image_filepath, "wb") as image_file:
-                        image_file.write(image_bytes)
-
-            # 2. 渲染頁面為圖像，以提取矢量圖和文本組成的圖表（無法直接提取）
-            pix = page.get_pixmap(dpi=dpi)
-            rendered_image_path = os.path.join(output_folder_path, f"page_{page_num + 1}_rendered.png")
-            pix.save(rendered_image_path)
-            
-            # 3. 使用OpenCV對渲染的圖像進行分割
-            image = cv2.imread(rendered_image_path)
-            if image is not None:
-                # 將圖像轉為灰度圖
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                # 將圖像二值化，調整閾值
-                _, binary = cv2.threshold(gray, binary_threshold, 255, cv2.THRESH_BINARY_INV)
-                # 使用膨脹操作合併相近的區域
-                kernel = np.ones((kernel_size, kernel_size), np.uint8)
-                dilated = cv2.dilate(binary, kernel, iterations=dilation_iterations)
-                
-                # 找到輪廓
-                contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-                # 根據輪廓進行切割
-                for idx, contour in enumerate(contours):
-                    segment_image_file_name = f"page_{page_num + 1}_segment_{idx + 1}.png"
-                    x, y, w, h = cv2.boundingRect(contour)
-                    
-                    # 濾除過小的區域
-                    if (w * h >= segment_threshold**2) and (w >= segment_threshold/2) and (h > segment_threshold/2):
-                        segmented_image = image[y:y+h, x:x+w]
-                        segmented_image_path = os.path.join(output_folder_path, segment_image_file_name)
-                        #print(segment_image_file_name, w, h)
-                        #print("Yes")
-                        # image_size = os.path.getsize(segmented_image_path) if os.path.exists(segmented_image_path) else 0
-                        # print(image_size)
-                        # if min_size <= image_size <= max_size:  # 檔案大小介於100KB和1MB之間
-                        #     cv2.imwrite(segmented_image_path, segmented_image)
-                        
-                    else:
-                        if del_image_folder_path is None:
-                            continue
-                        segmented_image_path = os.path.join(del_image_folder_path, segment_image_file_name)
-                        segmented_image = image[y:y+h, x:x+w]
-                        #print(segment_image_file_name, w, h)
-                        #print("No")
-                    
-                    #print()
-                    cv2.imwrite(segmented_image_path, segmented_image)
-                    
-                    image_size = os.path.getsize(segmented_image_path)
-                    if not (min_size <= image_size <= max_size):  # 檢查檔案大小是否在範圍內
-                        os.remove(segmented_image_path)  # 刪除不符合大小的檔案
-                            
-                # 刪除原始渲染的圖像
-                os.remove(rendered_image_path)
-
-    # 確保輸出文件夾存在
-    os.makedirs(output_folder_path, exist_ok=True)
-    # 確保del_image_folder_path存在
-    if del_image_folder_path is not None:
-      os.makedirs(del_image_folder_path, exist_ok=True)
-
-    # 使用線程池來並發處理各頁
-    with ThreadPoolExecutor() as executor:
-        executor.map(process_page, range(fitz.open(pdf_file_path).page_count))
-
-    print(f"提取完成，圖片保存在文件夾: {output_folder_path}")
-
 def delete_disclosure_section(text, window_size=20, keyword_density=0.2):
     keywords = [
         "disclosures", "important disclosure", "analyst certification",
