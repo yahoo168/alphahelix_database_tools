@@ -2,7 +2,7 @@ from setuptools import setup, find_packages #type: ignore
 
 setup(
     name='alphahelix_database_tools',
-    version='1.3.0',
+    version='1.3.2',
     author='Jeff Chen',
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
@@ -55,12 +55,13 @@ setup(
         "numpy==1.11.0",
         "oauthlib==3.2.2",
         "openai==1.35.3",
+        "opencv-python==4.10.0.84"
         "packaging==24.1",
         "pandas==2.2.2",
         "parso==0.8.4",
         "pexpect==4.9.0",
         "platformdirs==4.2.2",
-        "pillow=10.4.0",
+        "pillow==10.4.0",
         "prompt_toolkit==3.0.47",
         "proto-plus==1.24.0",
         "protobuf==4.25.3",
