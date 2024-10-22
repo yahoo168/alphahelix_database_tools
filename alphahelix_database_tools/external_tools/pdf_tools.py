@@ -13,11 +13,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def clean_gibberish_text(text):
-    # 定義正則表達式來匹配亂碼或無意義的符號組合
-    # [^\w\s]{1}：匹配單個非單詞字符或空白符號（如 %, ;, -）
+    # 定義正則表達式來匹配亂碼或無意義的符號組合，但排除 ':' 和 '：'
+    # [^\w\s:：]{1}：匹配單個非單詞字符或空白符號（如 %, ;, -），但不包括 ':' 和 '：'
     # \b\d+\b：匹配孤立的數字
     # \b[a-zA-Z]{1,2}\b：匹配孤立的1-2位英文字母
-    pattern = r"[^\w\s]{1}|\b\d+\b|\b[a-zA-Z]{1,2}\b"
+    pattern = r"[^\w\s:：]{1}|\b\d+\b|\b[a-zA-Z]{1,2}\b"
 
     # 使用正則表達式替換匹配到的部分
     cleaned_text = re.sub(pattern, '', text)
@@ -25,6 +25,7 @@ def clean_gibberish_text(text):
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
     
     return cleaned_text
+
 
 def count_text_length(text):
     # 匹配所有中文字符
