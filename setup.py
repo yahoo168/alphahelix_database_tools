@@ -2,7 +2,7 @@ from setuptools import setup, find_packages #type: ignore
 
 setup(
     name='alphahelix_database_tools',
-    version='1.3.3',
+    version='1.4.0',
     author='Jeff Chen',
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
