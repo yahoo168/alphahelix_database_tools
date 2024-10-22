@@ -2,7 +2,7 @@ from setuptools import setup, find_packages #type: ignore
 
 setup(
     name='alphahelix_database_tools',
-    version='1.1.0',
+    version='1.3.0',
     author='Jeff Chen',
     author_email='jeffchen@alphahelix.com.tw',
     description='For Internal Use Only.',
@@ -52,7 +52,7 @@ setup(
         "matplotlib==3.9.2",
         "nest-asyncio==1.6.0",
         "nltk==3.8.1",
-        "numpy=1.11.0",
+        "numpy==1.11.0",
         "oauthlib==3.2.2",
         "openai==1.35.3",
         "packaging==24.1",
