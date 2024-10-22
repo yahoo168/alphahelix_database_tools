@@ -10,6 +10,7 @@ comm==0.2.2
 debugpy==1.8.1
 decorator==5.1.1
 distro==1.9.0
+easyocr==1.7.2
 executing==2.0.1
 google-api-core==2.19.0
 google-api-python-client==2.134.0
@@ -39,11 +40,13 @@ numpy==2.0.0
 matplotlib==3.9.2
 oauthlib==3.2.2
 openai==1.35.3
+opencv-python=4.10.0.84
 packaging==24.1
 pandas==2.2.2
 parso==0.8.4
 pexpect==4.9.0
 platformdirs==4.2.2
+pillow=10.4.0
 prompt_toolkit==3.0.47
 proto-plus==1.24.0
 protobuf==4.25.3

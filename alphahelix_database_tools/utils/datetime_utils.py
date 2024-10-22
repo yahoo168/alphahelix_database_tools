@@ -116,10 +116,6 @@ def combine_dict(dict1, dict2):
             merged_dict[key] = value
     return merged_dict
 
-def make_folder(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
-
 def token_trans(name, source, folder_path):
     trans_table_file_path = os.path.join(folder_path, source+".txt")
     
