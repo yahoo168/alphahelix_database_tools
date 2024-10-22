@@ -58,13 +58,11 @@ def filter_images_by_text(input_folder, output_folder, min_text_length=15, max_t
             # 計算文字數量
             img_text_length = count_text_length(img_text)
             print(f"圖片 {img_file_name} 的文字長度: {img_text_length}, 包含關鍵字: {contains_keyword}")
+            print(img_text[:150])
             if contains_keyword and (max_text_length >= img_text_length >= min_text_length):
                 output_path = os.path.join(output_folder, img_file_name)
                 Image.open(img_file_path).save(output_path)
                 print(f"保存圖片: {img_file_name}")
-                print(img_text_length)
-                print(img_text[:300])
-                print("\n")
             else:
                 print(f"過濾圖片: {img_file_name}")
             print("\n")
