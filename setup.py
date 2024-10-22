@@ -52,7 +52,7 @@ setup(
         "matplotlib==3.9.2",
         "nest-asyncio==1.6.0",
         "nltk==3.8.1",
-        "numpy==1.11.0",
+        "numpy==1.23.0",
         "oauthlib==3.2.2",
         "openai==1.35.3",
         "opencv-python==4.10.0.84",
