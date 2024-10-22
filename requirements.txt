@@ -36,7 +36,7 @@ jupyter_core==5.7.2
 matplotlib-inline==0.1.7
 nest-asyncio==1.6.0
 nltk==3.8.1
-numpy==2.0.0
+numpy==1.11.0
 matplotlib==3.9.2
 oauthlib==3.2.2
 openai==1.35.3
