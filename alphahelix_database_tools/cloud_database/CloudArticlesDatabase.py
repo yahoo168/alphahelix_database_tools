@@ -786,7 +786,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         if market_info_meta_list is not None:
             for info_meta in market_info_meta_list:
                 market_info_content += datetime2str(info_meta["data_timestamp"])
-                market_info_content += f"內容: {info_meta["content"]}"
+                market_info_content += f"內容: {info_meta['content']}"
         
         filtered_market_info_content = _filter_market_info_LLM(market_info_content)
         issue_review_text = _create_issue_review_LLM(issue, issue_json_string, filtered_market_info_content)
