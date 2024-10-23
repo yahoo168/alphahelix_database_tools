@@ -507,95 +507,95 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                                         notification_sub_type=notification_template_type,
                                         variables_dict=variables_dict)
             
-    
     # 根據與特定個股相關的報告，製作看多/看空的論點摘要，可設定最大報告數量
-    def save_stock_report_review(self, ticker, review_report_nums=10):
-        def _create_raw_stock_report_review(summary_list, ticker, output_format="json_object"):
-            prompt = (f"以下是一些「股票代號為{ticker}的公司」近期的多篇研究報告，"
-                    f"挑選出其中的bullish_outlook以及bearish_outlook進行整理，2個面向各約300字，不包含對目標價的預測。")
-            prompt += f"將回傳值以 JSON 格式提供，其中包含以下2️個key:'bullish_outlook'以及'bearish_outlook'。"
-            prompt += f"除了上述的部分外，不要有任何其他內容\n\n"
-            prompt += f"研究報告內容:\n{'\n'.join(summary_list)}\n"
-            
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+    # def save_stock_report_review(self, ticker, review_report_nums=10):
+    #     def _create_raw_stock_report_review(summary_list, ticker, output_format="json_object"):
+    #         prompt = (
+    #             f"以下是一些「股票代號為{ticker}的公司」近期的多篇研究報告，"
+    #             f"挑選出其中的bullish_outlook以及bearish_outlook進行整理，2個面向各約300字，不包含對目標價的預測。"
+    #             f"將回傳值以 JSON 格式提供，其中包含以下2️個key:'bullish_outlook'以及'bearish_outlook'。"
+    #             f"除了上述的部分外，不要有任何其他內容\n\n"
+    #             f"研究報告內容:\n{'\n'.join(summary_list)}\n"
+    #         )            
+    #         return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
 
-        def _adjust_stock_report_review_format(summary_text, ticker, output_format="text"):
-            prompt = (f"以下是一些「股票代號為{ticker}的公司」近期的研究結論，"
-                    f"以條列式的方式，整理其中的論點，每個論點以2~3句話表示內容，論點數量不高於10個。")
-            prompt += f"回傳格式：每個論點以換行符('\n')分隔，論點前面不需要數字編號"
-            prompt += f"除了上述的部分外，不要有任何其他內容\n\n"
-            prompt += f"研究報告內容:\n{'\n'.join(summary_text)}\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+    #     def _adjust_stock_report_review_format(summary_text, ticker, output_format="text"):
+    #         prompt = (f"以下是一些「股票代號為{ticker}的公司」近期的研究結論，"
+    #                 f"以條列式的方式，整理其中的論點，每個論點以2~3句話表示內容，論點數量不高於10個。")
+    #         prompt += f"回傳格式：每個論點以換行符('\n')分隔，論點前面不需要數字編號"
+    #         prompt += f"除了上述的部分外，不要有任何其他內容\n\n"
+    #         prompt += f"研究報告內容:\n{'\n'.join(summary_text)}\n"
+    #         return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
              
-        # 將json格式的看多/看空論點解析成list
-        def _parse_outlook_argument(argument_text):
-            argument_list = argument_text.split("\n")
-            argument_list = [argument for argument in argument_list if argument]
-            return argument_list
+    #     # 將json格式的看多/看空論點解析成list
+    #     def _parse_outlook_argument(argument_text):
+    #         argument_list = argument_text.split("\n")
+    #         argument_list = [argument for argument in argument_list if argument]
+    #         return argument_list
         
-        def _compare_outlook_argument(old_argument_list, new_argument_list):
-            old_argument, new_argument = '\n'.join(old_argument_list), '\n'.join(new_argument_list)
-            prompt =  f"以下是投資機構針對{ticker}的新、舊觀點，請針對新增與減少的部分寫成一篇約150字的短文。"
-            prompt += f"回傳格式：以markdown語法顯示，段落標題為「新增的部分」與「減少的部分」，格式使用### \n"
-            prompt += f"舊的論點: {old_argument}\n\n"
-            prompt += f"新的論點: {new_argument}\n\n"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
+    #     def _compare_outlook_argument(old_argument_list, new_argument_list):
+    #         old_argument, new_argument = '\n'.join(old_argument_list), '\n'.join(new_argument_list)
+    #         prompt =  f"以下是投資機構針對{ticker}的新、舊觀點，請針對新增與減少的部分寫成一篇約150字的短文。"
+    #         prompt += f"回傳格式：以markdown語法顯示，段落標題為「新增的部分」與「減少的部分」，格式使用### \n"
+    #         prompt += f"舊的論點: {old_argument}\n\n"
+    #         prompt += f"新的論點: {new_argument}\n\n"
+    #         return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
             
-        # 取得自上次總結後，新上傳報告的meta data，預設為最新的10篇
-        # 查找stock_report_review中data_timestamp字段的最大值
-        last_reviews_doc = self.MDB_client["published_content"]["stock_report_review"].find_one(sort=[("data_timestamp", -1)])
+    #     # 取得自上次總結後，新上傳報告的meta data，預設為最新的10篇
+    #     # 查找stock_report_review中data_timestamp字段的最大值
+    #     last_reviews_doc = self.MDB_client["published_content"]["stock_report_review"].find_one(sort=[("data_timestamp", -1)])
 
-        last_processed_timestamp = None
-        if last_reviews_doc:
-            last_processed_timestamp = last_reviews_doc["data_timestamp"]
+    #     last_processed_timestamp = None
+    #     if last_reviews_doc:
+    #         last_processed_timestamp = last_reviews_doc["data_timestamp"]
             
-        stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find({"ticker": ticker, "processed_timestamp": {"$gt": last_processed_timestamp}})
-                                    .sort([("processed_timestamp", -1)]).limit(review_report_nums))
+    #     stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find({"ticker": ticker, "processed_timestamp": {"$gt": last_processed_timestamp}})
+    #                                 .sort([("processed_timestamp", -1)]).limit(review_report_nums))
         
-        # 若無新的報告，則不進行總結
-        if len(stock_report_meta_list) == 0:
-            return
-        logging.info(f"[SERVER][Data Process][{ticker}][stock_report_review]")
-        # 逐篇進行摘要，取得看多/看空的論點（json格式）
-        summary_list = [stock_report_meta["summary"] for stock_report_meta in stock_report_meta_list]
+    #     # 若無新的報告，則不進行總結
+    #     if len(stock_report_meta_list) == 0:
+    #         return
+    #     logging.info(f"[SERVER][Data Process][{ticker}][stock_report_review]")
+    #     # 逐篇進行摘要，取得看多/看空的論點（json格式）
+    #     summary_list = [stock_report_meta["summary"] for stock_report_meta in stock_report_meta_list]
             
-        # 調用LLM，取得看多/看空的論點（json格式）
-        stock_report_review_json_text = _create_raw_stock_report_review(summary_list, ticker, output_format="json_object")
-        stock_report_review = json.loads(stock_report_review_json_text)
-        # 取得看多/看空的論點(dict)
-        bullish_outlook_raw_text, bearish_outlook_raw_text = stock_report_review["bullish_outlook"], stock_report_review["bearish_outlook"]
-        # 調整看多論點格式，原先為整段文字，改為條列式的論點列表
-        bullish_argument_text = _adjust_stock_report_review_format(summary_text=bullish_outlook_raw_text, ticker=ticker, output_format="text")
-        bullish_outlook_argument_list = _parse_outlook_argument(argument_text=bullish_argument_text)
-        # 調整看空論點格式，原先為整段文字，改為條列式的論點列表
-        bearish_argument_text = _adjust_stock_report_review_format(summary_text=bearish_outlook_raw_text, ticker=ticker, output_format="text")
-        bearish_outlook_argument_list = _parse_outlook_argument(argument_text=bearish_argument_text)
-        # 取得舊的看多/看空論點，進行比較
-        old_stock_report_review_meta = self.MDB_client["published_content"]["stock_report_review"].find_one({"ticker": ticker}, sort=[("date", -1)])
+    #     # 調用LLM，取得看多/看空的論點（json格式）
+    #     stock_report_review_json_text = _create_raw_stock_report_review(summary_list, ticker, output_format="json_object")
+    #     stock_report_review = json.loads(stock_report_review_json_text)
+    #     # 取得看多/看空的論點(dict)
+    #     bullish_outlook_raw_text, bearish_outlook_raw_text = stock_report_review["bullish_outlook"], stock_report_review["bearish_outlook"]
+    #     # 調整看多論點格式，原先為整段文字，改為條列式的論點列表
+    #     bullish_argument_text = _adjust_stock_report_review_format(summary_text=bullish_outlook_raw_text, ticker=ticker, output_format="text")
+    #     bullish_outlook_argument_list = _parse_outlook_argument(argument_text=bullish_argument_text)
+    #     # 調整看空論點格式，原先為整段文字，改為條列式的論點列表
+    #     bearish_argument_text = _adjust_stock_report_review_format(summary_text=bearish_outlook_raw_text, ticker=ticker, output_format="text")
+    #     bearish_outlook_argument_list = _parse_outlook_argument(argument_text=bearish_argument_text)
+    #     # 取得舊的看多/看空論點，進行比較
+    #     old_stock_report_review_meta = self.MDB_client["published_content"]["stock_report_review"].find_one({"ticker": ticker}, sort=[("date", -1)])
         
-        if old_stock_report_review_meta:
-            old_bullish_argument_list = old_stock_report_review_meta["stock_report_review"]["bullish_outlook"]
-            old_bearish_argument_list = old_stock_report_review_meta["stock_report_review"]["bearish_outlook"]
+    #     if old_stock_report_review_meta:
+    #         old_bullish_argument_list = old_stock_report_review_meta["stock_report_review"]["bullish_outlook"]
+    #         old_bearish_argument_list = old_stock_report_review_meta["stock_report_review"]["bearish_outlook"]
             
-            bullish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bullish_argument_list, new_argument_list=bullish_outlook_argument_list)
-            bearish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bearish_argument_list, new_argument_list=bearish_outlook_argument_list)
-        # 若無舊的看多/看空論點，則不進行比較，填入空字串
-        else:
-            bullish_outlook_diff, bearish_outlook_diff = "", ""
+    #         bullish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bullish_argument_list, new_argument_list=bullish_outlook_argument_list)
+    #         bearish_outlook_diff = _compare_outlook_argument(old_argument_list=old_bearish_argument_list, new_argument_list=bearish_outlook_argument_list)
+    #     # 若無舊的看多/看空論點，則不進行比較，填入空字串
+    #     else:
+    #         bullish_outlook_diff, bearish_outlook_diff = "", ""
             
-        # 存入MongoDB
-        stock_report_review_meta = {
-            "ticker": ticker,
-            "data_timestamp": datetime(datetime.now().year, datetime.now().month, datetime.now().day),
-            "upload_timestamp": datetime.now(),
-            "stock_report_review": {
-                "bullish_outlook": bullish_outlook_argument_list,
-                "bearish_outlook": bearish_outlook_argument_list,
-                "bullish_outlook_diff": bullish_outlook_diff,
-                "bearish_outlook_diff": bearish_outlook_diff,
-            },
-        }
-        self.MDB_client["published_content"]["stock_report_review"].insert_one(stock_report_review_meta)
+    #     # 存入MongoDB
+    #     stock_report_review_meta = {
+    #         "ticker": ticker,
+    #         "data_timestamp": datetime(datetime.now().year, datetime.now().month, datetime.now().day),
+    #         "upload_timestamp": datetime.now(),
+    #         "stock_report_review": {
+    #             "bullish_outlook": bullish_outlook_argument_list,
+    #             "bearish_outlook": bearish_outlook_argument_list,
+    #             "bullish_outlook_diff": bullish_outlook_diff,
+    #             "bearish_outlook_diff": bearish_outlook_diff,
+    #         },
+    #     }
+    #     self.MDB_client["published_content"]["stock_report_review"].insert_one(stock_report_review_meta)
     
     def save_issue_review(self, issue_id, max_days=90, max_doc_num=30, end_timestamp=None):
         def _get_issue_concensus_and_dissensus_LLM(issue, issue_review_text):
