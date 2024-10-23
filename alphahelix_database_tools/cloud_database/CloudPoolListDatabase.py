@@ -72,7 +72,7 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
             if responsible_ticker_list:
                 all_ticker_list.extend(responsible_ticker_list)
                 for ticker in responsible_ticker_list:
-                    logging.info(f"[SERVER][Auto-Follow-Ticker]{user_meta["username"]}->{ticker}")
+                    logging.info(f"[SERVER][Auto-Follow-Ticker]{user_meta['username']}->{ticker}")
                     self.MDB_client["research_admin"]["ticker_info"].update_one({"ticker": ticker}, {"$addToSet": {"following_users": user_id}}, upsert=False)
         
         # 待改：Sean追蹤所有有人追蹤的ticker
