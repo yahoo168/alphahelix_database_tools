@@ -18,14 +18,11 @@ def clean_gibberish_text(text):
     # \b\d+\b：匹配孤立的數字
     # \b[a-zA-Z]{1,2}\b：匹配孤立的1-2位英文字母
     pattern = r"[^\w\s:：]{1}|\b\d+\b|\b[a-zA-Z]{1,2}\b"
-
     # 使用正則表達式替換匹配到的部分
     cleaned_text = re.sub(pattern, '', text)
     # 去除多餘的空白
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
-    
     return cleaned_text
-
 
 def count_text_length(text):
     # 匹配所有中文字符

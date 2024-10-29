@@ -51,7 +51,7 @@ _all_notification_template_dict = {
                             {% if responsible_event_tickers_str %}
                             其中您負責研究的個股包括：{{responsible_event_tickers_str}}
                             {% else %}
-                            您負責研究的個股近{{days}}天沒有公司事件
+                            您負責研究的個股在本期間沒有公司事件
                             {% endif %}
                             </p> 
                             
@@ -60,7 +60,7 @@ _all_notification_template_dict = {
                             {% if following_event_tickers_str %}
                             其中您追蹤的個股包括：{{following_event_tickers_str}}
                             {% else %}
-                             您追蹤的個股近{{days}}天沒有公司事件 
+                             您追蹤的個股在本期間沒有公司事件
                             {% endif %}
                             </p> 
                         </div>

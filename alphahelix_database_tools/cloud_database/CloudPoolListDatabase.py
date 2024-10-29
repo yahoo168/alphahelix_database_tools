@@ -92,10 +92,8 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
         # 遍歷所有 tickers
         for ticker in ticker_list:
             # 取得 ticker 對應的 following_users 列表
-            following_user_id_list = self.MDB_client["research_admin"]["ticker_info"].find_one(
-                {"ticker": ticker}, {"following_users": 1, "_id": 0}
-            )["following_users"]
-
+            following_user_id_list = self.get_ticker_following_user_list(ticker)
+            
             # 遍歷 collections 並更新對應的 documents
             for collection in collection_list:
                 self.MDB_client["users"][collection].update_many(
