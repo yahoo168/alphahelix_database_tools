@@ -28,10 +28,30 @@ _all_notification_template_dict = {
                     '''
         },
         
+        "investment_assumption_review_update": {
+          "title": "【投資假設】{{investment_assumption}}",
+          "message":'''
+                    您追蹤的投資假設「<a href='{{page_url}}' target='_blank'>{{investment_assumption}} </a> 」已更新完成。
+                    <br><br>
+                    本次風險評分為「<strong>{{risk_score}}</strong>」分，系統判斷風險情況為「<strong>{{score_intepretation}}</strong>」，詳情請點擊連結查看。
+                    '''
+        },
+        
         "stock_news_summary_update": {
             "title": "【新聞總結】{{date}} ",
             "message":'''
                     個股新聞總結（{{date}}）已更新完成，請點擊<a href='{{page_url}}' target='_blank'>查看</a>
+                    '''
+        },
+        
+        "stock_pick_review_update": {
+            "title": "【推薦清單】【{{date}}】 {{tickers_str}}",
+            "message":'''
+                    個股推薦總結（{{date}}）已更新完成，請點擊<a href='{{page_url}}' target='_blank'>查看</a>
+                    <br><br>
+                    本次清單包含以下個股：【{{tickers_str}}】
+                    <br><br>
+                    本清單來自於公司定期追蹤的70餘位特定作者，每日總結其最新推薦個股。
                     '''
         }
     },

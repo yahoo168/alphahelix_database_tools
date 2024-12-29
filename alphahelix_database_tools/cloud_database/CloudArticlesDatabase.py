@@ -6,16 +6,14 @@ from jinja2 import Template #type: ignore
 
 from dotenv import load_dotenv #type: ignore
 
-# 避免採用相對導入，在雲端伺服器容易報錯
-# from alphahelix_database_tools.cloud_database.config.notification_template import _all_notification_template_dict
-
 from alphahelix_database_tools.external_tools.news_tools import *
-from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API
-from alphahelix_database_tools.external_tools.pdf_tools import get_pdf_text_from_url
+from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API, truncate_text_to_token_limit, get_embedding
+from alphahelix_database_tools.external_tools.pdf_tools import get_pdf_text_from_url, clean_gibberish_text
+from alphahelix_database_tools.external_tools.google_tools import GoogleCloudStorageTools
+
 from alphahelix_database_tools.external_tools.google_tools import *
 from alphahelix_database_tools.utils.format_utils import standardize_dict, standardize_key, remove_duplicates_by_key
 from alphahelix_database_tools.utils.notification_template import _all_notification_template_dict
-
 from alphahelix_database_tools.cloud_database.CloudPoolListDatabase import CloudPoolListDatabase
 from .AbstractCloudDatabase import *
 
@@ -33,20 +31,28 @@ MongoDB 会将其转换为UTC时间并存储为一个没有时区偏移的时间
 # 應該放在這？
 load_dotenv()
 
+# 之後移動到資料庫中
+ticker_disambiguation_dict = {
+        "GOOGL": "GOOG",
+        "BRK.B": "BRK",
+        "BRK.A": "BRK"
+}
+
 class CloudArticlesDatabase(AbstractCloudDatabase):
     def __init__(self, config_folder_path=None):
         super().__init__(config_folder_path=config_folder_path)  #調用AbstractCloudDatabase 的__init__方法
         self._load_api_keys()
         self.MDB_client = MongoClient(self.cluster_uri_dict["articles"], server_api=ServerApi('1'))
+        
         # 待確認：這樣合適嗎？
         self.pool_list_db = CloudPoolListDatabase()
         
+    # 載入 .env 文件(用於本地測試)，並取用環境變數
     def _load_api_keys(self):
-        # 載入 .env 文件(用於本地測試)，並取用環境變數
         self.polygon_API_key = os.getenv('polygon_API_key')
         self.rapid_API_key = os.getenv('rapid_API_key')
         self.news_API_key = os.getenv('news_API_key')
-        self.OpenAI_API_key = os.getenv('OpenAI_API_key')        
+        self.OpenAI_API_key = os.getenv('OpenAI_API_key')
 
     def update_stock_news_summary(self):
         self.save_shorts()
@@ -70,7 +76,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         
         # 寄送用戶通知
         self.create_notification(user_id_list=user_id_list, 
-                                        priority=2,
+                                        priority=3,
                                         notification_type="update", # "system"、"update"、"todo" 或 "alert"。
                                         notification_sub_type="stock_news_summary_update",
                                         variables_dict=notification_variables_dict)
@@ -208,7 +214,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 prompt += (news_meta.get("content") or '') + '\n'
                 prompt += (news_meta.get("url") or '') + '\n\n'
                 
-            summary_content = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
+            summary_content = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="o1-mini", output_format="text")
             return summary_content
         
         lastest_doc_meta = self.MDB_client["preprocessed_content"]["stock_news_summary"].find_one({"ticker": ticker}, sort=[("data_timestamp", -1)])
@@ -258,252 +264,247 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             }
             self.MDB_client["preprocessed_content"]["stock_news_summary"].insert_one(doc_meta)
             
-    # 針對特定issue，找出尚未針對此issue進行摘要的document meta list（以ticker搜索），可限定最長回顧天數與最大報告數量
-    def _get_unextracted_documents_of_certain_issue(self, issue_id, max_days, max_doc_num):
-        # 依照issue_id，取得issue的meta資料
-        issue_meta = self.MDB_client["users"]["following_issues"].find_one({"_id": issue_id})
-        # 取得與issue相關的tickers
-        ticker_list = issue_meta["tickers"]
-        # 若有多個ticker，限制最大文件數量為100
-        max_doc_num = min(len(ticker_list) * max_doc_num, 100)
-        # 針對tickers搜索相關的文件（目前僅有stock report）
-        document_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"]
-                                    .find({"ticker": {"$in": ticker_list}, 
-                                            "data_timestamp": {"$gte": datetime.now() - timedelta(days=max_days)}
-                                        },
-                                        {"ticker":1, "title":1, "url":1, "issue_summary.issue_id": 1, "data_timestamp": 1})  # projection
-                                    .sort("data_timestamp", DESCENDING)
-                                    .limit(max_doc_num))
-
-        # for-loop目前已經摘要過的issue，過濾掉已經有此issue的document
-        result_document_meta_list = [
-            document_meta for document_meta in document_meta_list
-            if not any(issue["issue_id"] == issue_id for issue in document_meta.get("issue_summary", []))
-        ]
-
-        return result_document_meta_list
-    
     # 針對特定issue，在一定的期間內，找出尚未針對此issue進行摘要的document並進行摘要（以ticker搜索document）
     def extract_documents_of_certain_issue(self, issue_id, max_days=90, max_doc_num=30):
+        # 針對特定issue，找出尚未針對此issue進行摘要的document meta list（以ticker搜索），可限定最長回顧天數與最大報告數量
+        def _get_unextracted_documents_of_certain_issue(issue_id, max_days, max_doc_num):
+            # 依照issue_id，取得issue的meta資料
+            issue_meta = self.MDB_client["users"]["following_issues"].find_one({"_id": issue_id})
+            # 取得與issue相關的tickers
+            ticker_list = issue_meta["tickers"]
+            # 若有多個ticker，限制最大文件數量為100
+            max_doc_num = min(len(ticker_list) * max_doc_num, 100)
+            # 待改：針對tickers搜索相關的文件（目前僅有stock report）
+            document_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"]
+                                        .find({"tickers": {"$in": ticker_list}, 
+                                                "data_timestamp": {"$gte": datetime.now() - timedelta(days=max_days)}
+                                            })
+                                        .sort("data_timestamp", DESCENDING)
+                                        .limit(max_doc_num))
+            
+            # for-loop目前已經摘要過的issue，過濾掉已經有此issue的document
+            result_document_meta_list = []
+            # 檢查 text_summaries 中的 issue_summaries 是否包含指定的 issue_id
+            for document_meta in document_meta_list:
+                if not any(issue["issue_id"] == issue_id for issue in document_meta.get("issue_summaries", [])):
+                    result_document_meta_list.append(document_meta)
+                
+            return result_document_meta_list
+        
         # 依照issue_id，取得issue的meta資料
         issue_meta = self.MDB_client["users"]["following_issues"].find_one({"_id": issue_id})
         # 取得issue名稱（即issue）
         issue = issue_meta["issue"]
         # 找出尚未針對此issue進行摘要的document
-        document_meta_list = self._get_unextracted_documents_of_certain_issue(issue_id=issue_id, max_days=max_days, max_doc_num=max_doc_num)
+        document_meta_list = _get_unextracted_documents_of_certain_issue(issue_id=issue_id, max_days=max_days, max_doc_num=max_doc_num)
         logging.info(f"[SERVER][investment_issue][check][{issue}] Found {len(document_meta_list)} unextracted documents")
+        
         for index, document_meta in enumerate(document_meta_list):
             logging.info(f"[SERVER][LLM] Summarizing({index}). Title: {document_meta['title']}")
-            report_id, ticker, pdf_file_url = document_meta["_id"], document_meta["ticker"], document_meta["url"]
-            
-            # 針對單篇document與issue進行摘要，取得issue content（關閉全文摘要，僅針對issue摘要）
-            result_data_dict = self._extract_info_from_document(ticker, pdf_file_url, issue_list=[issue], 
-                                                                extract_summary=False, extract_issue_summary=True)
-            
-            # issue_content_dict為一個dict，key為issue，value為issue_content，但本處只有一個issue，故直接取第一個value
-            issue_content_dict = result_data_dict["issue_content_dict"]
-            issue_content = list(issue_content_dict.values())[0] if issue_content_dict else ''
+            report_id, pdf_file_url = document_meta["_id"], document_meta["url"]
+            content_text = get_pdf_text_from_url(pdf_file_url)
+            # 進行issue摘要（只有一個issue，故直接取第一個元素）
+            issue_summary_meta = self.create_issue_summary(content_text, [issue_meta])[0]
             
             # 將issue content存入MongoDB（在原document的issue_summary中添加issue_content）
-            issue_meta = {
-                "issue_id": issue_id,
-                "issue": issue,
+            self.MDB_client["preprocessed_content"]["stock_report"].update_one({"_id": report_id}, {"$push": {"issue_summaries": issue_summary_meta}})
+            
+    def create_issue_summary(self, content_text, issue_meta_list):
+        # 摘要投資議題相關內容（調用LLM）
+        def _create_issue_summary_LLM(content_text, issue_list, word_number=500):
+            prompt = (
+                f"以下是一篇投資研究報告，依據以下不同的'issue'，各自挑選出相關的段落（盡量完整），"
+                f"整合成短文後翻譯為「繁體中文」，各個段落短文的字數約{word_number}字。\n"
+                f"切勿添加本篇報告以外的內容，僅依照本篇報告提供的內容整理即可，若沒有相關內容可返回空字串('')。\n"
+                f"'issue':「{', '.join(issue_list)}」\n"
+                
+                f"格式請確保返回的 JSON 格式中只有以下key：{', '.join(issue_list)}，value則為對應的issue段落短文）\n"
+                f"報告內容:\n\n{content_text}"
+            )
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="json_object")
+        
+        # 建立issue列表和issue_id映射表
+        issue_id_mapping = {item_meta['issue']: item_meta['_id'] for item_meta in issue_meta_list}
+        standardized_issue_list = [standardize_key(item_meta['issue']) for item_meta in issue_meta_list]
+        
+        try:
+            # 呼叫 LLM 獲取摘要內容
+            issue_content_json_text = _create_issue_summary_LLM(content_text, standardized_issue_list)
+            issue_content_dict, _ = standardize_dict(json.loads(issue_content_json_text))
+        
+        except Exception as e:
+            logging.error(f"Error parsing issue content JSON: {e}")
+            return {}
+
+        # 生成 issue_summary_list
+        issue_summary_meta_list = []
+        for item_meta in issue_meta_list:
+            issue_content = str(issue_content_dict.get(standardize_key(item_meta["issue"]), '')) # 若無此issue，則取空字串
+            
+            # 限制issue_content最小長度，因LLM可能回傳「空字串」等無意義內容
+            issue_content = '' if len(issue_content) <= 10 else issue_content
+            
+            issue_summary_meta = {
+                "issue": item_meta["issue"],
+                "issue_id": issue_id_mapping[item_meta["issue"]],
                 "issue_content": issue_content
             }
-            self.MDB_client["preprocessed_content"]["stock_report"].update_one({"_id": report_id}, {"$push": {"issue_summary": issue_meta}})
+            issue_summary_meta_list.append(issue_summary_meta)
             
-    # 使用LLM抽取報告摘要（全文摘要 & 追蹤問題摘要）
-    def _extract_info_from_document(self, ticker, pdf_file_url, document_type="stock_report", issue_list=[], extract_summary=True, extract_issue_summary=True):
-        def _creat_stock_report_summary(text, ticker, output_format="text"):
-            prompt = (f"以下是一篇「股票代號為{ticker}的公司」的研究報告，請深入整理其中的重點，並提供詳細的摘要。\n"
-                    f"包括'全文摘要', '看多論點', '看空論點'三個段落，並翻譯為繁體中文。回傳的格式應該只有以下三個段落：\n"
-                    f"'全文摘要'、'看多論點'、'看空論點'\n"
-                    f"段落內文應該完整呈現，不要使用任何符號或特別標註。\n")
+        return issue_summary_meta_list
+    
+    def process_raw_stock_report(self, document_meta):
+        def _get_stock_report_full_text_summary_LLM(content_text, ticker):
+            prompt = (f"以下是一篇「股票代號為{ticker}的公司」的研究報告，請深入整理其中的重點，並提供詳細的摘要，要求如下：\n"
+                      "1. 包括「投資建議與理由、全文摘要、看多論點、看空論點、產業趨勢」，共5個段落，並翻譯為繁體中文。\n"
+                      "2. 回傳內容僅包含以上段落，不要包含任何內容，以及開場白或結語。\n"
+                      "3. 不要以文章標題作為開頭，直接從「投資建議與理由」開始撰寫。\n"
+                      "4. 格式：使用Markdown語法回傳。\n"
+                      )
             
-            prompt += f"研究報告內容:\n\n {text}"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+            prompt += f"研究報告內容:\n\n {content_text}"
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
         
-        def _create_transcript_summary(text, ticker, output_format="text"):
-            prompt = (f"以下是一篇「股票代號為{ticker}的公司」財報會議的逐字稿，請整理其中的內容，盡可能保留細節，並翻譯為繁體中文（專有名詞保留原文）"
-                      f"將內容分段呈現，並確保每段落的標題依照以下順序：「全文摘要、財務表現與Guidance、業績驅動因素、未來展望與投資計劃、風險與挑戰、市場競爭和行業動態」。"
+        ticker, pdf_file_url = document_meta["tickers"][0], document_meta["url"]
+        content_text = get_pdf_text_from_url(pdf_file_url)
+        result_dict = {
+            "text_summaries": {
+                "full_text_summary": _get_stock_report_full_text_summary_LLM(content_text, ticker),
+            }
+        }
+        return result_dict
+    
+    def process_raw_stock_transcript(self, document_meta, is_compare_last_one=True):
+        def _create_stock_transcript_full_text_summary_LLM(ticker, content_text):
+            prompt = (f"以下是一篇「股票代號為{ticker}的公司」財報會議的逐字稿，請整理其中的內容，盡可能保留細節，並翻譯為繁體中文（專有名詞、人名、業務項目保留原文）"
+                      f"將內容分段呈現，並確保每段落的標題依照以下順序：「全文摘要、財務表現與Guidance、業務營收占比與驅動因素、未來展望與投資計劃、風險與挑戰、市場競爭和行業動態」。"
                       f"格式：使用markdown語法，不要包含任何的系統開場白與結語")
             
-            prompt += f"財報會議逐字稿:\n\n {text}"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+            prompt += f"財報會議逐字稿:\n\n {content_text}"
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
         
-        def _create_transcript_analyst_QA_summary(text, ticker, output_format="text"):
-            prompt = (f"以下是一篇「股票代號為{ticker}的公司」財報會議的逐字稿，請整理其中的分析師問答部分，並翻譯成繁體中文（專有名詞與人名保留原文並加註）。"
-                      f"將內容以 Markdown 格式整理，確保整理內容涵蓋所有問題。範例格式如下，不要包含任何的系統開場白與結語：\n\n"
+        def _create_stock_transcript_analyst_QA_summary_LLM(ticker, content_text):
+            prompt = (f"以下是一篇「股票代號為{ticker}的公司」財報會議的逐字稿，請整理其中的分析師問答部分，並翻譯成繁體中文（專有名詞、人名、業務項目保留原文並加註）。"
+                      f"將內容以 Markdown 格式整理，確保涵蓋所有問題與回答，不要遺漏。範例格式如下，不要包含任何的系統開場白與結語：\n\n"
                       
-                      f"## Truist Securities (Will Stein）\n"
+                      f"## Truist Securities (Will Stein) \n"
                       f"- 問題：市場上對於 Tesla 商業化的擔憂，特別是與 AI 有關。Tesla 如何在 Tesla 和 xAI 之間分配資源，以確保 Tesla 能夠受益？\n"
                       f"- Elon Musk（CEO）：關於 GPU 轉移到 xAI 的報導過時且被誤解了。當時 Tesla 沒有足夠的空間來安置這些 GPU，將它們分配到其他地方實際上是符合 Tesla 的利益。\n\n")
             
-            prompt += f"財報會議逐字稿:\n\n {text}"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+            prompt += f"財報會議逐字稿:\n\n {content_text}"
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
+        
+        def _create_prior_period_comparison(ticker, current_content_text, last_content_text):
+            prompt = (f"請對股票代號為「{ticker}」的公司新一季與前一季的財報會議內容進行詳細對比分析，要求如下：\n"
+                    f"1. 內容盡可能包含細節\n"
+                    f"2. 以繁體中文書寫（專有名詞、業務部門、公司特定產品，保留英文名詞）。\n"
+                    f"3. 請按照以下面向進行對比：「財務規劃、管理層態度、分析師提問主題、產品與技術進展、市場策略、行業趨勢」\n"
+                    f"格式範例（使用 Markdown 語法）："
+                    
+                    f"### 產品與技術進展\n"
+                    f"- 本季相較於上一季，凸顯了公司在矽碳化鎢領域的佈局和持續增長的市場需求，第二季ON宣布收購SWIR Vision Systems，藉此強化其在工業與國防領域的產品組合，同時展示其矽碳化鎢技術的領先地位，尤其在電動車（EV）市場擴展上取得突破。\n"
+                    f"而在第三季，隨著中國BEV（電池電動車）市場需求增加，矽碳化鎢產品的收入顯著增長，同時公司在全球數據中心的電源管理解決方案上也獲得了設計訂單支持。\n"
+                    f"此外公司還成功完成了200毫米M3e矽碳化鎢技術的資格認證，為未來的擴展奠定了技術基礎。\n\n"
+                    
+                    f"請勿包含任何系統開場白或結語"
 
-        def _create_transcript_comparison():
-            # 請依據以下提供的股票代號為「TSLA」的公司，新一季的財報會議內容與前一季，有哪些轉變？從
-            # 「財務規劃、管理層態度、分析師提問主題、產品與技術進展、 市場策略、行業趨勢」等面向進行對比分析
-            pass
+                    f"新一季財報會議逐字稿：\n\n{current_content_text}\n\n"
+                    f"前一季財報會議逐字稿：\n\n{last_content_text}"
+                )
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
         
-        def _creat_issue_following_summary(text, ticker, issue_list, word_number, output_format="json_object"):
-            prompt = (f"以下是一篇與「股票代號為{ticker}的公司」有關的文件"
-                    f"依據以下不同的'issue'，各自挑選出相關的段落（盡量完整），整合成短文後翻譯為「繁體中文」，各個段落短文的字數約{word_number}字。\n"
-                    f"切勿添加本篇文件以外的內容，僅依照本篇文件提供的內容整理即可，若沒有相關內容可返回空字串('')。")
-            
-            prompt += f"'issue':「{', '.join(issue_list)}」\n"
-            prompt += f"格式請確保返回的 JSON 格式中只有以下key：{', '.join(issue_list)}, value則為對應的issue段落短文）\n"
-            prompt += f"文件內容:\n\n {text}"
-            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format=output_format)
+        ticker, pdf_file_url = document_meta["tickers"][0], document_meta["url"]
+        content_text = get_pdf_text_from_url(pdf_file_url)
         
-        # 初始化結果字典（避免出現key error）
-        result_data_dict = {
-            "report_summary": '',
-            "issue_content_dict": {},  
-        }
-        # 從PDF中取得段落
-        try:
-            pdf_text = get_pdf_text_from_url(pdf_file_url)
-        except Exception as e:
-            logging.error(f"Error retrieving PDF from {pdf_file_url}: {e}")
-            return result_data_dict
+        if is_compare_last_one:
+            # 取得上一篇財報會議逐字稿的內容
+            last_document_meta = self.MDB_client["preprocessed_content"]["event_document"].find_one(
+                        {"tickers": ticker, "data_timestamp": {"$lt": document_meta["data_timestamp"]}},
+                        sort=[("data_timestamp", -1)]  # 按 `data_timestamp` 由大到小排序
+                    )
+            if last_document_meta:
+                last_content_text = get_pdf_text_from_url(last_document_meta["url"])
+                prior_period_comparison = _create_prior_period_comparison(ticker, content_text, last_content_text)
+            else:
+                prior_period_comparison = ''
+        else:
+            prior_period_comparison = ''
         
-        # 文件全文摘要 - 調用LLM
-        if extract_summary:
-            if document_type == "stock_report":
-                document_summary = _creat_stock_report_summary(pdf_text, ticker, output_format="text")
-            
-            elif document_type == "transcript":
-                document_summary = _create_transcript_summary(pdf_text, ticker, output_format="text")
-                analyst_QA_summary = _create_transcript_analyst_QA_summary(pdf_text, ticker, output_format="text")
-                result_data_dict["analyst_QA_summary"] = analyst_QA_summary
-            
-            result_data_dict["document_summary"] = document_summary
-        
-        # 取得特定issue的摘要，並存入issue_content_dict（key: issue, value: issue_content）
-        if extract_issue_summary:
-            # 報告追蹤問題摘要 - 調用LLM
-            # 將issue_list的key進行standardize，降低LLM回傳的key(issue)變化的機率
-            standardized_issue_list = [standardize_key(issue) for issue in issue_list]
-            issue_content_json_text = _creat_issue_following_summary(pdf_text, ticker, standardized_issue_list, word_number=500, output_format="json_object")
-            # 預防少數情況可能因為LLM回傳的json格式有誤，導致dict解析錯誤而報錯
-            try:
-                standardized_issue_content_dict, reverse_key_mapping = standardize_dict(json.loads(issue_content_json_text))
-            except Exception as e:
-                logging.error(f"Error parsing issue content JSON: {e}")
-                return result_data_dict
-                            
-            # 使用standardize_key过滤出原先给定的issue，以原始issue為key，issue_content為value，存入issue_content_dict
-            # 处理摘要内容，确保issue_content若非string（有可能為list / dict）也被转换为字符串
-            issue_content_dict = {
-                issue: str(standardized_issue_content_dict.get(standardize_key(issue), ''))
-                for issue in issue_list
+        result_dict = {
+            "text_summaries": {
+                "full_text_summary": _create_stock_transcript_full_text_summary_LLM(ticker, content_text),
+                "analyst_QA_summary": _create_stock_transcript_analyst_QA_summary_LLM(ticker, content_text),
+                "prior_period_comparison": prior_period_comparison
             }
-            
-            # 將issue_content_dictd的standardize_key還原為原始key（issue）
-            result_data_dict["issue_content_dict"] = issue_content_dict
-            
-        return result_data_dict
-    
+        }
+        return result_dict
+        
     # 自動找出尚未預處理的stock report並進行處理（全文摘要 & 追蹤問題摘要）
-    def process_raw_stock_documents(self, document_type="stock_report"):
+    def process_raw_documents(self, document_type="stock_report"):
         # 根據document_type選擇不同的參數
         if document_type == "stock_report":
             source_collection = self.MDB_client["raw_content"]["raw_stock_report_non_auto"]
             des_collection = self.MDB_client["preprocessed_content"]["stock_report"]
+            notification_template_type = "stock_report_update"
         
         elif document_type == "transcript":
             source_collection = self.MDB_client["raw_content"]["raw_event_document"]
             des_collection = self.MDB_client["preprocessed_content"]["event_document"]
+            notification_template_type = "transcript_update"
+                
         else:
             logging.error(f"[SERVER][Data Process][{document_type}]: No such document type.")
             return
         
         # 取出尚未處理的documents
-        stock_document_meta_list = list(source_collection.find({"is_processed": False}))
-        stock_document_num = len(stock_document_meta_list)
-        logging.info(f"[SERVER][Data Process][共{stock_document_num}篇個股文件待處理]")
-
-        for index, stock_document_meta in enumerate(stock_document_meta_list):
-            document_id, title, ticker_list, pdf_file_url = stock_document_meta["_id"], stock_document_meta["title"], stock_document_meta["tickers"], stock_document_meta["url"]
-            logging.info(f"[SERVER][Data Process][{title}][開始處理第{index + 1}/{stock_document_num}篇non auto stock report]")
-
-            # 取出與該標的相關的active issue（預設最多10個）
-            ticker_issue_meta_list = list(self.MDB_client["users"]["following_issues"].find({"tickers": {"$in": ticker_list}, "is_active": True}, limit=10))
-            # 建立issue與issue_id的對應字典（因後續由LLM進行處理，返回的issue為str，須透過issue_id確認對應的資料庫物件
-            issue_id_mapping = {item_meta['issue']: item_meta['_id'] for item_meta in ticker_issue_meta_list}
-            ticker_issue_list = list(issue_id_mapping.keys())
+        document_meta_list = list(source_collection.find({"is_processed": False, "tickers": {"$ne": []}}))
+        
+        logging.info(f"[SERVER][Data Process][共{len(document_meta_list)}篇個股文件待處理]")
+        
+        for index, document_meta in enumerate(document_meta_list):
+            document_id, title, ticker_list = document_meta["_id"], document_meta["title"], document_meta["tickers"]
+            logging.info(f"[SERVER][Data Process][{title}][開始處理第{index + 1}/{len(document_meta_list)}篇non auto stock report]")
             
             # 待改：取出第一個ticker（若有多個ticker，僅取第一個）
             ticker = ticker_list[0]
             
-            # 將文件由LLM進行抽取（全文摘要 / 追蹤問題摘要）
-            extracted_info_data_dict = self._extract_info_from_document(
-                ticker=ticker,
-                pdf_file_url = pdf_file_url,
-                document_type = document_type,
-                issue_list = ticker_issue_list, 
-                extract_summary = True, 
-                extract_issue_summary = True if len(ticker_issue_list) > 0 else False # 若無issue，則不進行issue摘要
-            )
+            if document_type == "stock_report":    
+                extracted_data_dict = self.process_raw_stock_report(document_meta)
+                following_user_id_list = self.pool_list_db.get_ticker_following_user_list(ticker)
+                
+            elif document_type == "transcript":
+                extracted_data_dict = self.process_raw_stock_transcript(document_meta)
+                # 財報會議逐字稿預設發送給所有用戶
+                following_user_id_list = self.pool_list_db.get_active_user_id_list()
+                #following_user_id_list = [ObjectId("66601790f20eb424a340acd3")]
             
-            issue_summary_list = []
-            # 逐一取出LLM返回issue與issue_content，並進行解析後儲存
-            for issue, issue_content in extracted_info_data_dict["issue_content_dict"].items():
-                # 通過預先建立的issue_id_mapping，取得issue對應的issue_id
-                issue_id = issue_id_mapping.get(issue, None)
-                # 若issue_id為None，則不進行儲存
-                if issue_id is not None:
-                    issue_summary_meta = {
-                            "issue": issue,
-                            "issue_id": issue_id,
-                            "issue_content": issue_content
-                        }
-                    issue_summary_list.append(issue_summary_meta)
-                else:
-                    logging.warning(f"[SERVER][Data Process][{title}][處理丟失][issue: {issue}][issue_id: {issue_id}]")
-
+            content_text = get_pdf_text_from_url(document_meta["url"])
+            
+            # 取得相關issue的meta資料
+            issue_meta_list = list(self.MDB_client["users"]["following_issues"].find({"tickers": ticker, "is_active": True}, limit=10))
+            issue_summaries = self.create_issue_summary(content_text, issue_meta_list) if len(issue_meta_list) > 0 else []
+            
+            # 更新document_meta的內容
+            document_meta.update(extracted_data_dict)
+            document_meta["issue_summaries"] = issue_summaries
+            document_meta["processed_timestamp"] = datetime.now(timezone.utc)
+            
+            # 保存處理後的stock report meta到MongoDB，並取得inserted_id
+            mongodb_ops_result = des_collection.insert_one(document_meta)
+            document_id = mongodb_ops_result.inserted_id
+            
             # 將原始文件標識為已處理
             source_collection.update_one(
                 {"_id": document_id}, {"$set": {"is_processed": True}}
             )
             
-            # 更新stock_document_meta的內容
-            stock_document_meta.update({
-                "summary": extracted_info_data_dict["document_summary"],
-                "issue_summary": issue_summary_list,
-                "processed_timestamp": datetime.now()
-            })
-            
-            # 若有分析師問答，則存入（待改：這樣很亂）
-            if extracted_info_data_dict.get("analyst_QA_summary", ''):
-                stock_document_meta["analyst_QA_summary"] = extracted_info_data_dict["analyst_QA_summary"]
-            
-            # 保存處理後的stock report meta到MongoDB
-            result = des_collection.insert_one(stock_document_meta)
-            
-            # 寄送用戶通知，获取插入后的 _id
-            doc_id = result.inserted_id
-            
-            # 發送通知（依照文件類型發送不同的通知模板 / 用戶）
-            if document_type == "stock_report":
-                notification_template_type = "stock_report_update"
-                following_user_id_list = self.pool_list_db.get_ticker_following_user_list(ticker)
-                
-            elif document_type == "transcript":
-                notification_template_type = "transcript_update"
-                # 財報會議逐字稿預設發送給所有用戶
-                following_user_id_list = self.pool_list_db.get_active_user_id_list()
-                #following_user_id_list = [ObjectId("66601790f20eb424a340acd3")]
-            
-            # 若本標的有追蹤用戶，則發送通知  
+            # 若本標的有追蹤用戶，則發送通知（依照文件類型發送不同的通知模板 / 用戶）
             if following_user_id_list:
                 # 用於render通知模板的變數字典
                 variables_dict = {
                         "ticker": ticker,
-                        "page_url": f"/main/stock_document/US/{document_type}/{doc_id}",
-                        "title": os.path.splitext(stock_document_meta["title"])[0],
+                        "page_url": f"/main/stock_document/US/{document_type}/{document_id}",
+                        "title": os.path.splitext(title)[0], # 去除檔名的副檔名
                     }
                 # 發送通知
                 self.create_notification(user_id_list=following_user_id_list, 
@@ -552,7 +553,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         # 取得包含此issue id並且issue_content不為空的stock report
         market_stock_report_meta_list = list(self.MDB_client["preprocessed_content"]["stock_report"].find(
             {
-                "issue_summary": {
+                "issue_summaries": {
                     "$elemMatch": {
                         "issue_id": issue_id,
                         "issue_content": {"$ne": ''}
@@ -560,7 +561,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 },
                 "data_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp}
             },
-            projection={"issue_summary": {"$elemMatch": {"issue_id": issue_id, "issue_content": {"$ne": ""}}}, "data_timestamp": 1, "source": 1}
+            projection={"issue_summaries": {"$elemMatch": {"issue_id": issue_id, "issue_content": {"$ne": ""}}}, "data_timestamp": 1, "source": 1},
         ).limit(max_doc_num))
         
         # 取得參考的report id以留存紀錄
@@ -568,11 +569,8 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             report_meta["_id"] for report_meta in market_stock_report_meta_list
         ]
         
-        # 取得搜尋時間範圍內的新聞（依照ticker_list搜尋）
-        market_info_meta_list = list(self.MDB_client["preprocessed_content"]["stock_news_summary"].find(
-            {"ticker": {"$in": ticker_list},
-            "data_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp}}
-        ))
+        # 取得搜尋時間範圍內的新聞摘要（依照ticker_list搜尋）
+        market_info_meta_list = self.get_stock_news_summary(ticker_list, start_timestamp, end_timestamp)
         
         # 預先定義變數，避免後續出現未定義的情況        
         added_report_meta_list = []
@@ -643,10 +641,8 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                                      notification_type="update", # "system"、"update"、"todo" 或 "alert"。
                                      notification_sub_type="investment_issue_review_update",
                                      variables_dict=variables_dict)
-
         
     # 生成問題總結 (following issues review)，並儲存到資料庫（MongoDB）
-    
     def _get_issue_review_text_LLM(self, issue, stock_report_meta_list, market_info_meta_list=None):
         # 調用LLM，生成問題總結
         def _create_issue_review_LLM(issue, issue_content_json, market_info_content, output_format="text"):
@@ -665,6 +661,9 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         def _filter_market_info_LLM(market_info_content):
             prompt =  f"以下是針對市場的新聞資訊，請篩選出與「{issue}」高度相關的部分，過濾掉無關與低度相關的內容，整理成短文，標註日期但去除來源（url）。\n"
             prompt += f"「新聞資訊」:\n {market_info_content} \n"
+            # 4o的token限制為128,000，因此需要將prompt進行截斷
+            prompt = truncate_text_to_token_limit(prompt, 125000)
+            
             return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
         
         # 將自MongoDB取得的issue資料進行整理，改為適合GPT解析的格式，dict (source: content)
@@ -673,7 +672,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
             stock_report_meta_list = sorted(stock_report_meta_list, key=lambda x: x["data_timestamp"], reverse=True)
             issue_content_dict = defaultdict(list)
             for stock_report_meta in stock_report_meta_list:
-                issue_summary_meta_list = stock_report_meta.get("issue_summary", [])
+                issue_summary_meta_list = stock_report_meta.get("issue_summaries", [])
                 # 先前已經使用pymongo的運算子過濾（僅剩下一個issue summary element），不需再次過濾
                 issue_summary_meta = issue_summary_meta_list[0]
                 issue_content = issue_summary_meta.get("issue_content", '')
@@ -711,70 +710,332 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         issue_review_text = _create_issue_review_LLM(issue, issue_json_string, filtered_market_info_content)
         return issue_review_text
     
-    def save_investment_assumption_review(self, assumption_id):
-        # 使用正則表達式解析LLM回傳的review，取得風險分數，並刪除包含風險分數的那一行文字（若有）
-        def _get_risk_score(text):
-            match = re.search(r"風險分數[\s：]*\d+", text)
-
-            if match:
-                risk_score = int(re.search(r"\d+", match.group()).group())  # 提取並轉換為整數
-                # 刪除包含風險分數的那一行
-                clean_text = re.sub(r"風險分數[\s：]*\d+\s*\n?", "", text)
-                return risk_score, clean_text
+    # 取得搜尋時間範圍內的新聞（依照ticker_list搜尋）
+    def get_stock_news_summary(self, ticker_list, start_timestamp, end_timestamp):
+        stock_news_summary_meta_list = list(self.MDB_client["preprocessed_content"]["stock_news_summary"].find(
+            {"ticker": {"$in": ticker_list},
+            "data_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp}}
+        ))
+        return stock_news_summary_meta_list
+    
+    def get_stock_transcript_summary(self, ticker_list, start_timestamp, end_timestamp):
+        summary = ''
+        stock_transcript_meta_list = list(self.MDB_client["preprocessed_content"]["event_document"].find({"tickers": {"$in": ticker_list}, "data_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp}}))
+        for item_meta in stock_transcript_meta_list:
+            summary += f"Title: {item_meta["title"]}\n\n"
+            summary += f"全文摘要： {item_meta["text_summaries"]["full_text_summary"]} \n"
+            summary += f"分析師問答： {item_meta["text_summaries"]["analyst_QA_summary"]} \n"
+            summary += f"前期對比 {item_meta["text_summaries"].get("prior_period_comparison", '')} \n\n"
             
-            return None, text
-        
-        # 從 MongoDB 中檢索啟用的投資假設資料
-        investment_assumptions_meta = self.MDB_client["users"]["investment_assumptions"].find_one({"_id": assumption_id})
-        # 獲取投資假設
-        investment_assumption = investment_assumptions_meta["assumption"]
-        related_ticker_list = investment_assumptions_meta["tickers"]
-        
-        # 設定 prompt 初始文字
-        prompt = (
-            f"以下是針對 {', '.join(related_ticker_list)} 的投資假設，"
-            f"請根據以下的市場資訊，判斷投資假設是否已經被推翻，並計算風險分數（0～100），"
-            f"越高分代表被推翻的機率越高。\n"
-            f"回傳格式：「風險分數」、「總結」、「支持假設的資訊」、「反對假設的資訊」，"
-            f"除此之外不需要包含系統訊息。此外不要使用 markdown 語法的符號，純文字即可。\n\n"
-            f"投資假設：「{investment_assumption}」\n\n"
-        )
-
-        # 獲取與假設相關的市場資訊
-        linked_issues_meta_list = investment_assumptions_meta.get("linked_issues", [])
-        
-        for linked_issues_meta in linked_issues_meta_list:
-            issue = linked_issues_meta.get("issue")
-            issue_id = linked_issues_meta.get("issue_id")
+            summary += "相關議題段落\n\n"
+            issue_summary_meta_list = item_meta["issue_summaries"]
+            for issue_summary_meta in issue_summary_meta_list:
+                # 過濾掉過短的段落
+                if len(issue_summary_meta["issue_content"]) <= 10:
+                    continue
+                summary += f"議題： {issue_summary_meta["issue"]} \n"
+                summary += f"相關段落： {issue_summary_meta["issue_content"]} \n\n"
             
-            # 查詢對應的市場資訊文本
-            issue_review = self.MDB_client["published_content"]["issue_review"].find_one(
-                {"issue_id": issue_id},
-                sort=[("data_timestamp", -1)],
-                projection={"_id": 0, "added_issue_review": 1}
+        return summary
+    
+    def save_investment_assumption_review(self, assumption_id, max_days=90, min_days=14, end_timestamp=None):
+        def _create_risk_score_LLM(investment_assumption, market_info_content, last_risk_score, last_assumption_review):
+            prompt = (
+                f"請針對投資假設「{investment_assumption}」，進行風險評分，要求如下：\n"
+                f"1. 根據以下的資訊（議題分析 & 新聞 & 財報會議...），計算投資假設的risk_score（範圍：0～100）。\n"
+                f"   - 計算標準：80分以上代表假設已接近被推翻；70-79分表示假設存在重大疑慮；60-69分為存在部分風險；59分以下表示假設維持良好。\n"
+                f"2. 評分須參考前次風險評分與評分依據，若判斷本次風險高於前次，則risk score須上升，反之下降。\n"
+                f"3. 須給出評分依據，寫成一篇評論文章（risk_assessment），其中須包含「評分理由、前次對比」兩大段落，內容須詳細\n"
+                f"4. 不要包含開場白與結語，使用markdown語法，須翻譯為繁體中文。 \n\n"
+                f"5. 以 JSON 格式回傳，risk_assessment的value須為text，不要內嵌dict\n\n"
+                f"  - 格式範例：{{'risk_score': 60, 'risk_assessment': '###評分理由... ###前次對比 ...'}}\n\n"
+                
+                f"前次風險評分：{last_risk_score}\n"
+                f"前次評分依據：{last_assumption_review}\n\n"
+                f"市場資訊：「{market_info_content}」\n\n"
+            )
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="json_object")
+        
+        def _create_risk_analysis_LLM(investment_assumption, market_info_content):
+            prompt = (
+                f"根據以下的市場資訊（議題分析 & 新聞 & 財報會議摘要...），針對投資假設「{investment_assumption}」進行分析，要求如下：\n"
+                f"1. 撰寫一段詳細的分析文章，其中包含「總結」、「支持假設的資訊」、「反對假設的資訊」、三個段落，內容盡可能詳細，包含具體的數據\n"
+                f"2. 分析內容須標明資訊來源與日期，新聞若缺乏來源可保留內容，標注來源為新聞即可\n"
+                f"3. 使用markdown語法書寫，翻譯為繁體中文\n"
+                f"4. 不要包含開場白與結語 \n\n"
+                f"市場資訊：「{market_info_content}」"
             )
             
-            # 如果查詢結果存在，則將其添加到 prompt 中
-            if issue_review and "added_issue_review" in issue_review:
-                issue_review_text = issue_review["added_issue_review"]
-                prompt += f"市場資訊： {issue}\n{issue_review_text}\n\n"
-
-        assumption_review_text = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
-        risk_score, assumption_review_text = _get_risk_score(text=assumption_review_text)
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="o1-mini", output_format="text")
+        
+        # 製作並整理可以參考的市場資訊（待改：code很亂）
+        def _organize_market_info_content(investment_assumption, issue_review_meta_list, stock_news_summary_meta_list, stock_transcript_summary):
+            market_info_content = ''
+            
+            market_info_content += "\n 「議題分析」\n"
+            for issue_review_meta in issue_review_meta_list:
+                market_info_content += f"議題：\n{issue_review_meta['issue']}\n"
+                market_info_content += f"議題總結：\n{issue_review_meta['issue_review']}\n\n"
+            
+            #新聞部分
+            raw_news_summary = ''
+            for news_meta in stock_news_summary_meta_list:
+                raw_news_summary += f"日期：{datetime2str(news_meta['data_timestamp'])}\n"
+                raw_news_summary += f"內容：{news_meta['content']}\n\n"
+            
+            prompt = (
+                    f"從以下新聞資訊中篩選出所有與驗證或推翻「投資假設：{investment_assumption}」相關的新聞，保留每則新聞的完整內容，"
+                    f"包括盡可能多的細節，不進行任何刪減，並標注新聞日期：\n"
+                    f"{raw_news_summary}"
+                    )
+            
+            filtered_stock_news_summary = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
+            market_info_content += "\n ### 新聞資訊 ### \n"
+            market_info_content += filtered_stock_news_summary
+            
+            market_info_content += "\n「財報會議摘要」\n"
+            market_info_content += stock_transcript_summary
+            
+            return market_info_content
+        
+        # 取得投資假設資料
+        investment_assumption_meta = self.MDB_client["users"]["investment_assumptions"].find_one({"_id": assumption_id})
+        investment_assumption, ticker_list, following_user_id_list = investment_assumption_meta["assumption"], investment_assumption_meta["tickers"], investment_assumption_meta.get("following_users", [])
+        
+        # 設定搜尋文件的時間範圍（預設為從當前回顧N日）
+        if end_timestamp is None:
+            end_timestamp = datetime.now()
+        
+        start_timestamp = end_timestamp - timedelta(days=max_days)
+        logging.info(f"[SERVER][assumption_review][{investment_assumption}][{datetime2str(start_timestamp)} ~ {datetime2str(end_timestamp)}]")
+        
+        # 依照時間間隔，判斷是否需要進行更新，並取得上一次的風險分數與評論，供後續評分參考
+        last_assumption_review_meta = self.MDB_client["published_content"]["assumption_review"].find_one({"assumption_id": assumption_id}, sort=[("data_timestamp", -1)])
+        if last_assumption_review_meta:
+            last_risk_score = last_assumption_review_meta["risk_score"]
+            last_assumption_review = last_assumption_review_meta["assumption_review"]
+            last_review_timestamp = last_assumption_review_meta["data_timestamp"]
+            
+            # 若距離前次更新不足min_days日，則不進行更新（須先判斷大小，因有時可能會需要回溯歷史，此類情況不需要判斷間隔）
+            if (end_timestamp > last_review_timestamp) and ((end_timestamp - last_review_timestamp).days < min_days):
+                logging.info(f"[SERVER][assumption_review][{investment_assumption}] 距離前次更新不足{min_days}日，本次不進行更新")
+                return
+            
+        else:
+            last_risk_score = '前次未評分'
+            last_assumption_review = '前次未評分'
+         
+        # 獲取與投資假設聯動的issue（預先設定）
+        linked_issues_meta_list = investment_assumption_meta.get("linked_issues", [])
+        # 查詢各issue最新的issue_review（優先取added_issue_review，若無則取market_issue_review）
+        issue_review_meta_list = []
+        for linked_issues_meta in linked_issues_meta_list:
+            issue, issue_id = linked_issues_meta["issue"], linked_issues_meta["issue_id"]
+            
+            issue_review_meta = self.MDB_client["published_content"]["issue_review"].find_one({"issue_id": issue_id, 
+                                                                                               "data_timestamp": {"$lte": end_timestamp, "$gte": start_timestamp}}, 
+                                                                                              sort=[("data_timestamp", -1)],)
+            # 若無issue review，則跳過
+            if not issue_review_meta:
+                continue
+            
+            if issue_review_meta.get("added_issue_review", ''):
+                issue_review_text = issue_review_meta["added_issue_review"]
+            
+            elif issue_review_meta.get("market_issue_review", ''):
+                issue_review_text = issue_review_meta["market_issue_review"]
+            
+            else:
+                raise ValueError()
+            issue_review_meta_list.append({"issue":issue, "issue_review":issue_review_text})
+        
+        # 取得搜尋時間範圍內的新聞（依照ticker_list搜尋）
+        stock_news_summary_meta_list = self.get_stock_news_summary(ticker_list, start_timestamp, end_timestamp)
+        
+        # 取得搜尋時間範圍內的財報會議逐字稿摘要
+        stock_transcript_summary = self.get_stock_transcript_summary(ticker_list, start_timestamp, end_timestamp)
+        
+        try:
+            # 將參考資訊組合排版成市場資訊
+            market_info_content = _organize_market_info_content(investment_assumption, issue_review_meta_list, stock_news_summary_meta_list, stock_transcript_summary)
+            risk_assessment_json_text = _create_risk_score_LLM(investment_assumption, market_info_content, last_risk_score, last_assumption_review)
+            risk_assessment_dict = json.loads(risk_assessment_json_text)
+            assert ("risk_score" in risk_assessment_dict) and ("risk_assessment" in risk_assessment_dict)
+            assumption_review_text = _create_risk_analysis_LLM(investment_assumption, market_info_content)
+            
+            risk_score = risk_assessment_dict["risk_score"]
+            risk_assessment = risk_assessment_dict["risk_assessment"]
+        
+        except json.JSONDecodeError:
+            logging.error(f"[SERVER][assumption_review][{assumption_id}]: JSON解析失敗")
+            return
         
         # 存入MongoDB
         self.MDB_client["published_content"]["assumption_review"].insert_one(
             {
                 "assumption_id": assumption_id,
                 "investment_assumption": investment_assumption,
-                "linked_issues": linked_issues_meta_list,
-                "risk_score": risk_score,
+                "linked_issues": investment_assumption_meta.get("linked_issues", []), #待改：評估是否需要
                 "data_timestamp": datetime(datetime.now().year, datetime.now().month, datetime.now().day),
-                "upload_timestamp": datetime.now(),
-                "assumption_review": assumption_review_text,
+                "upload_timestamp": datetime.now(timezone.utc),
+                "risk_score": risk_score,
+                "risk_assessment": risk_assessment,
+                "assumption_review": assumption_review_text
             }
         )
+
+        # 標註investment_assumption更新日期
+        self.MDB_client["users"]["investment_assumption"].update_one({"_id": assumption_id}, {"$set": {"updated_timestamp": datetime.now(timezone.utc)}})
+        
+        # 寄送用戶通知
+        if following_user_id_list:
+            if risk_score >= 80:
+                score_intepretation = "假設已接近被推翻"
+            elif risk_score >= 70:
+                score_intepretation = "假設存在重大疑慮"
+            elif risk_score >= 60:
+                score_intepretation = "假設存在部分風險"
+            else:
+                score_intepretation = "假設維持良好"
+            
+            notification_variables_dict = {
+                "investment_assumption": investment_assumption,
+                "risk_score": risk_score,
+                "score_intepretation": score_intepretation,
+                "page_url": f"/main/investment_assumption_review/{assumption_id}",
+            }
+            
+            # 寄送用戶通知
+            self.create_notification(user_id_list=following_user_id_list, 
+                                            priority=3,
+                                            notification_type="update", # "system"、"update"、"todo" 或 "alert"。
+                                            notification_sub_type="investment_assumption_review_update",
+                                            variables_dict=notification_variables_dict)
+        
+    def recognize_stock_report_ticker(self):
+        def recognize_stock_report_ticker_LLM(text):
+            prompt = ("請根據以下報告內容分析，這篇報告與哪些美股上市公司有關，回傳股票代號，要求如下：\n"
+                        "1. 股票代號最多不超過3個。\n"
+                        "2. 回傳順序依照相關性高低排序。\n"
+                        "3. 以json格式回傳，範例如下：。\n"
+                        "tickers: ['AAPL', 'GOOGL', 'TSLA']\n\n"
+                    )
+            
+            prompt += f"報告內容: {text}\n\n"
+            json_string = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="json_object")
+            ticker_list = json.loads(json_string).get("tickers", [])
+            return ticker_list
+        
+        collection = self.MDB_client["raw_content"]["raw_stock_report_non_auto"]
+        document_meta_list = list(collection.find({"is_processed": False, "is_deleted": False, "tickers": []}))
+
+        logging.info(f"[SERVER] 共 {len(document_meta_list)} 則報告需要辨識ticker")
+        for document_meta in document_meta_list:
+            url = document_meta["url"]
+            # 取得pdf內容
+            report_text = get_pdf_text_from_url(url)
+            report_text = clean_gibberish_text(report_text)
+            # 透過LLM辨識股票代號
+            ticker_list = recognize_stock_report_ticker_LLM(report_text)
+            # 處理股票代號（減少歧義，例如BRK.B -> BRK, GOOGL -> GOOG）
+            ticker_list = [ticker_disambiguation_dict.get(ticker, ticker) for ticker in ticker_list]
+            logging.info(document_meta["title"])
+            logging.info(ticker_list)
+            # 保存tickers
+            collection.update_one({"_id": document_meta["_id"]}, {"$set": {"tickers": ticker_list}})
     
+    def save_stock_pick_review(self, end_timestamp=None, days=1):
+        def create_stock_pick_review_LLM(report_text):
+            prompt = (
+                "以下是多篇報告的內容，請根據以下要求彙整為一篇投資建議總結：\n"
+                "1. 彙整各篇報告中提及的個股投資建議，去除重複內容，並將相同個股的論述合併。\n"
+                "2. 開頭以簡要摘要說明本次包含的推薦個股及其所屬產業，確保涵蓋所有提及的個股，但無需列出非推薦個股。\n"
+                "3. 以繁體中文與 Markdown 語法撰寫。\n"
+                "4. 總結中不需加入系統性結語。\n"
+                "5. 每個個股建議為一個段落，段落結尾簡介該公司的基本資訊（兩句話）。\n"
+                "6. 請確保使用以下格式返回，格式範例：\n"
+                    "### 總結：\\n- 本次個股推薦包含AAPL, GOOG, SMCI 等AI相關科技類股，以及OXY, ET 等傳統能源類股...\n"
+                    "### AAPL：建議賣出，短期缺乏催化劑，存在高估值風險\n"
+                    "- 投資建議：（投資建議內容）\n"
+                    "- 公司簡介：（公司基本資訊）\n\n"
+                
+                f"報告內容：\n{report_text}"
+            )
+
+            return call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="text")
+
+        collection = self.MDB_client['preprocessed_content']['stock_report']
+        
+        # 若未指定結束時間，則取得最後一次的報告時間，並設定為當天
+        if end_timestamp is None:
+            last_review_meta = self.MDB_client["published_content"]['stock_pick_review'].find_one(sort=[("data_timestamp", -1)])
+            last_data_timestamp = last_review_meta["data_timestamp"]
+            current_date_timestamp = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) #不使用.date()，會導致MDB儲存錯誤
+            data_timestamp_list = pd.date_range(start=(last_data_timestamp+timedelta(days=1)), end=current_date_timestamp, freq='D').to_list()
+        
+        
+        for end_timestamp in data_timestamp_list:
+            start_timestamp = end_timestamp - timedelta(days=1)
+            
+            # 取得前一天的報告
+            query = {"author_level": {"$gte": 3}, "data_timestamp": start_timestamp}
+            document_meta_list = list(collection.find(query))
+            logging.info(f"[SERVER][Stock Pick Review][{datetime2str(start_timestamp)}-{datetime2str(end_timestamp)}]  共{len(document_meta_list)}篇報告，嘗試進行彙整")
+            
+            # 若時間區段內報告數量不足，則略過
+            if len(document_meta_list) == 0:
+                logging.warning(f"[SERVER][Stock Pick Review][{datetime2str(end_timestamp)}] 報告數量不足，僅有{len(document_meta_list)}篇報告")
+                continue
+            
+            report_text = ''
+            recommendation_ticker_list = []
+            for document_meta in document_meta_list:
+                
+                full_text_summary = document_meta["text_summaries"]["full_text_summary"]
+                ticker_list = document_meta["tickers"]
+                recommendation_ticker_list.append(ticker_list[0]) # 僅取第一個ticker（因預設為最相關，若每篇都全部取，會太多）
+                tickers_string = ', '.join(ticker_list)
+                title = document_meta["title"]
+                
+                report_text += f"# 報告標題: {title}"
+                report_text += f"# 相關個股: {tickers_string}"
+                report_text += full_text_summary
+
+            stock_pick_review_text = create_stock_pick_review_LLM(report_text)
+            recommendation_ticker_list = list(set(recommendation_ticker_list)) # 去除重複的ticker
+            
+            review_meta = {
+                "data_timestamp": datetime(end_timestamp.year, end_timestamp.month, end_timestamp.day),
+                "upload_timestamp": datetime.now(timezone.utc),
+                "time_range": {"start": start_timestamp, "end": end_timestamp},
+                "stock_pick_review": stock_pick_review_text,
+                "tickers": recommendation_ticker_list,
+                "ref_report_id": [document_meta["_id"] for document_meta in document_meta_list],
+            }
+
+            # 存入資料庫
+            result = self.MDB_client["published_content"]['stock_pick_review'].insert_one(review_meta)
+            
+            # 寄送通知
+            following_user_id_list = self.pool_list_db.get_active_user_id_list()
+            # following_user_id_list = [ObjectId("66601790f20eb424a340acd3")]
+            
+            notification_variables_dict = {
+                "date": datetime2str(end_timestamp),
+                "tickers_str": ', '.join(recommendation_ticker_list),
+                "page_url": f"/main/stock_pick_review/{str(result.inserted_id)}",
+            }
+            
+            # 寄送通知
+            self.create_notification(
+                user_id_list = following_user_id_list,  # 單個用戶列表
+                priority = 3,
+                notification_type = "update",  # "system"、"update"、"todo" 或 "alert"
+                notification_sub_type = "stock_pick_review_update",
+                variables_dict = notification_variables_dict
+            )
+
+            
     # "system"、"update"、"todo" 或 "alert"。
     def create_notification(self, user_id_list, priority, notification_type, notification_sub_type, variables_dict=None):
         # 依照通知類型（包含主類型與sub類型），取得通知模板
@@ -850,7 +1111,7 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
         logging.info(f"[SERVER][DATA][NEWS][{ticker}][{data_source}][{start_timestamp_str}][{end_timestamp_str}] 去除重複後，剩餘{len(news_meta_list)}則新聞")
         return news_meta_list        
     
-    def creat_ticker_event_notification(self, days=7):
+    def create_ticker_event_notification(self, days=7):
         # 計算時間範圍
         start_timestamp = datetime.now(timezone.utc)
         end_timestamp = start_timestamp + timedelta(days=days)
@@ -899,6 +1160,205 @@ class CloudArticlesDatabase(AbstractCloudDatabase):
                 notification_sub_type="ticker_event_alert",
                 variables_dict=notification_variables_dict
             )
+    
+    def reclassify_industry_report(self):
+        """
+        重新分類行業報告，將可能為個股報告的報告轉移至raw_stock_report_auto，並進行標題調整
+        """
+        def _reclassify_industry_report_LLM(title, content_text):
+            prompt = ("請分析以下文字，要求如下："
+                "1. 判斷這是一篇「個股報告」或「行業報告」，給出其為針對單一個股研究的個股報告的可能性（0～1），越高代表越可能是個股報告。\n"
+                "2. 列出與這篇報告最相關的公司的股票代號，台股代號格式使用（2330_TT），美股代號不要添加後綴\n"
+                "3. 判斷該股票代號的所在地區（若為台灣為TW，美股為US，歐洲為EU，中國為CN，韓國為KW，日本為JP，若不在以上類別，皆歸類為US）\n"
+                "3. 取一個新的標題，概要這篇報告的主題（標題所用的語言與待分析文字的語言一致）。\n"
+                "4. 使用Json格式回傳，回傳格式如下：\n"
+                    "{'is_stock_report': 0.7, 'relevant_ticker': 'AAPL', 'market': 'US', title': 'Apple AI表現差強人意，iphone升級意願不如預期'}\n"
+                f"以下為待分析的文字：\n\n Title:{title} \n Content: {content_text}"
+                )
+            json_string = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o", output_format="json_object")
+            result_dict = json.loads(json_string)
+            
+            required_keys = ["is_stock_report", "relevant_ticker", "title", "market"]
+            for key in required_keys:
+                assert key in result_dict, f"API回傳格式錯誤: 缺少 {key}"
+            
+            return result_dict
+
+        doc_meta_list = list(self.MDB_client["raw_content"]["raw_industry_report"].find({"is_deleted": False, "processed_info.is_confirmed": {"$ne": True}}, 
+                                                                                sort=[("data_timestamp", -1)]).limit(1000))
+
+        logging.info(f"【SERVER】共{len(doc_meta_list)}則行業報告待重新分類")
+        for doc_meta in doc_meta_list:
+            title = doc_meta["title"]
+            text = get_pdf_text_from_url(url=doc_meta["url"])
+            text = clean_gibberish_text(text)
+            text = truncate_text_to_token_limit(text, 500)
+            
+            result_dict = _reclassify_industry_report_LLM(doc_meta["title"], text)
+            
+            # 標註為已由LLM確認
+            doc_meta["processed_info"]["is_confirmed"] = True
+                
+            # 若為個股報告的可能性大於0.75，則判斷為個股報告（加入ticker後轉移collection位置）
+            if result_dict["is_stock_report"] >= 0.85:
+                print(title)
+                print(result_dict)
+                doc_meta["tickers"].append(result_dict["relevant_ticker"])
+                doc_meta["market"] = result_dict["market"]
+                self.MDB_client["raw_content"]["raw_stock_report_auto"].insert_one(doc_meta)
+                self.MDB_client["raw_content"]["raw_industry_report"].delete_one({"_id": doc_meta["_id"]})
+            
+            else:
+                #print("Industry")
+                # 若原標題過於簡短，則使用LLM產生的新標題
+                if len(title) <= 20:
+                    doc_meta["title"] = result_dict["title"]
+                
+                self.MDB_client["raw_content"]["raw_industry_report"].update_one({"_id": doc_meta["_id"]}, {"$set": doc_meta})
+    
+    def summarize_industry_report(self):
+        def _create_industry_report_summary_LLM(text):
+            prompt = ("請整理以下的行業研究報告內容，格式與要求如下：\n"
+                        "1. 依主題分段摘要，每段以一句話作為標題概括內容，例如：「半導體製程：Nanosheet採全包覆式技術突破FinFET瓶頸」。\n"
+                        "2. 每段以Markdown格式呈現，重點以條列式描述，避免過多連續文字描述。\n"
+                        "3. 每段文字內容需超過 200 字，並確保涵蓋關鍵數字與細節。\n"
+                        "4. 報告中不要添加開場白與結語，直接進入主題，且不要包含全文標題。\n"
+                        f"報告內容：\n\n {text}"
+                    )
+            raw_text = call_OpenAI_API(API_key=self.OpenAI_API_key, prompt=prompt, model_version="gpt-4o-mini", output_format="text")
+            # 清除LLM可能包含的markdown標記（會導致顯示錯誤）
+            cleaned_markdown_text = re.sub(r"```(?:markdown)?", "", raw_text)
+            return cleaned_markdown_text
+
+        src_collection = self.MDB_client["raw_content"]["raw_industry_report"]
+        des_collection = self.MDB_client["preprocessed_content"]["industry_report"]
+
+        doc_meta_list = list(src_collection.find({"is_deleted": False,
+                                                "processed_info.is_summary_extracted": False,
+                                                }, sort=[("data_timestamp", -1)]).limit(800))
+        for doc_meta in doc_meta_list:
+            title, url = doc_meta["title"], doc_meta["url"]
+            logging.info(f"【SERVER】【Industry Report】【Summary】處理行業報告：{title}")
+            report_text = get_pdf_text_from_url(url)
+            # 限制token數量，避免超過LLM限制導致報錯
+            report_text = truncate_text_to_token_limit(report_text, 128000)
+            full_text_summary = _create_industry_report_summary_LLM(report_text)
+            text_summaries_dict = { 
+                "text_summaries": {
+                            "full_text_summary": full_text_summary,
+                }
+            }
+            doc_meta.update(text_summaries_dict)
+            
+            doc_meta["processed_info"]["is_summary_extracted"] = True
+            full_text_summary_for_embedding = truncate_text_to_token_limit(full_text_summary, 8000)
+            doc_meta["embedding"] = get_embedding(full_text_summary_for_embedding)
+            
+            des_collection.insert_one(doc_meta)
+            src_collection.update_one({"_id": doc_meta["_id"]},  # Filter to locate the document
+                                    {"$set": {"processed_info.is_summary_extracted": True}}  # Update operation
+                                    )
+    
+    def delete_duplicated_docs(self, doc_type, gcs_bucket_name="investment_report", days_interval=10, size_threshold=0.01, time_diff_days=3):
+        """
+        找出指定集合類型中可能重複的文檔。
+        
+        :param doc_type: str, 指定集合類型 ("industry_report", "stock_report", "stock_memo")
+        :param gcs_bucket_name: str, GCS 存儲桶名稱，默認為 "investment_report"
+        :param credential_path: str, Google Cloud Storage 認證文件路徑
+        :param days_interval: int, 查詢日期範圍（默認10天）
+        :param size_threshold: float, Blob 大小差異閾值（默認 1%）
+        :param time_diff_days: int, 判定重複的時間差閾值（默認3天）
+        :return: list, 包含可能重複文檔的元數據
+        """
+        
+        # 待改：初始化 GCS 客戶端
+        credential_path="/Users/yahoo168/Desktop/GOOGLE_APPLICATION_CREDENTIALS.json"
+        gcs_client = GoogleCloudStorageTools(credential_file_path=credential_path)
+        
+        # 根據 doc_type 選擇集合
+        collection_map = {
+            "industry_report": self.MDB_client["raw_content"]["raw_industry_report"],
+            "stock_report": self.MDB_client["raw_content"]["raw_stock_report_auto"],
+            "stock_memo": self.MDB_client["raw_content"]["raw_stock_memo"]
+        }
+        if doc_type not in collection_map:
+            raise ValueError("Invalid collection type. Choose from: 'industry_report', 'stock_report', 'stock_memo'.")
+        
+        collection = collection_map[doc_type]
+        # 計算時間範圍
+        end_timestamp = datetime.now()
+        start_timestamp = end_timestamp - timedelta(days=days_interval)
+
+        # 聚合管道
+        pipeline = [
+            {
+                "$match": {
+                    "data_timestamp": {
+                        "$gte": start_timestamp,
+                    },
+                    "is_deleted": {"$ne": True}
+                }
+            },
+            {
+                "$group": {
+                    "_id": {
+                        "tickers": "$tickers",
+                        "source": "$source"
+                    },
+                    "docs": {
+                        "$push": {
+                            "_id": "$_id",
+                            "data_timestamp": "$data_timestamp",
+                            "tickers": "$tickers",
+                            "source": "$source",
+                            "blob_name": "$upload_info.blob_name",
+                        }
+                    }
+                }
+            }
+        ]
+        
+        # 執行聚合管道
+        grouped_docs = list(collection.aggregate(pipeline))
+        
+        # 結果文檔集合
+        duplicated_doc_meta_list = []
+
+        # 遍歷每個分組
+        for group in grouped_docs:
+            docs = group["docs"]
+            docs.sort(key=lambda x: x["data_timestamp"])  # 根據 data_timestamp 排序
+            
+            # 遍歷排序後的文檔，找出 data_timestamp 在指定天數內的文檔
+            for i in range(len(docs) - 1):
+                doc1 = docs[i]
+                doc2 = docs[i + 1]
+                timestamp1 = doc1["data_timestamp"]
+                timestamp2 = doc2["data_timestamp"]
+
+                # 判斷時間差
+                if abs((timestamp1 - timestamp2).days) <= time_diff_days:
+                    # 使用 GCS 客戶端取得 blob 大小
+                    blob_size1 = gcs_client.get_blob(gcs_bucket_name, doc1["blob_name"]).size
+                    blob_size2 = gcs_client.get_blob(gcs_bucket_name, doc2["blob_name"]).size
+
+                    # 判斷 blob 大小差異
+                    if blob_size1 and blob_size2:
+                        size_difference = abs(blob_size1 - blob_size2) / max(blob_size1, blob_size2)
+                        if size_difference <= size_threshold:
+                            print(doc2["tickers"], doc2["source"])
+                            print(doc2["data_timestamp"], doc2["blob_name"])
+                            # 只保留 timestamp 較後的文檔
+                            duplicated_doc_meta_list.append({
+                                "duplicate_doc_id": doc2["_id"],
+                                "duplicate_blob_name": doc2["blob_name"]
+                            })
+        
+        duplicate_doc_id_list = [doc["duplicate_doc_id"] for doc in duplicated_doc_meta_list]
+        collection.update_many({"_id": {"$in": duplicate_doc_id_list}}, {"$set": {"is_deleted": True}})
+        # return duplicated_doc_meta_list
+        
 
 # def save_stock_reports_auto(self, ticker_list, start_date=None):
     #     if start_date == None:

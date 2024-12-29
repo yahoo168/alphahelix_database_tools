@@ -12,13 +12,17 @@ class CloudUsStockDatabase(AbstractCloudDatabase):
         for item in item_list:
             item_df = self.get_item_df(item=item, method=method, start_date=start_date, end_date=end_date, num=num)
             item_df_list.append(item_df)
-            # 待改：新增資料轉化部分（思考：有沒有比較好的流程？）
             
         if if_align == True:
             item_df_list = get_aligned_df_list(item_df_list)
 
         return dict(zip(item_list, item_df_list))
 
+    # 取得最新的ticker_list
+    def get_latest_univ_ticker_list(self, univ_name):
+        ticker_df = self.get_item_df(item=univ_name, method="by_num", num=1)
+        return list(ticker_df.iloc[-1])
+    
     # 待改：trade_date底層資料應改為market_status
     # 取得交易日日期序列（datetime列表），若不指定區間則預設為全部取出
     def get_stock_trade_date_list(self, start_date=None, end_date=None):
@@ -119,6 +123,7 @@ class CloudUsStockDatabase(AbstractCloudDatabase):
             return 0
 
         price_df = self._get_item_data_df_by_date(item=price_item, start_date=start_date, end_date=end_date)
+        # 使用forward方法調整股價，可還原當日股價（要計算當日股利報酬）
         adjust_factor_df = self._get_stock_adjust_factor_df(start_date=start_date, end_date=end_date, method="forward")        
         dividends_df = self._get_item_data_df_by_date(item="ex_dividends", start_date=start_date, end_date=end_date)
         dividends_ret_df = (dividends_df / price_df).fillna(0)
@@ -324,27 +329,4 @@ class CloudUsStockDatabase(AbstractCloudDatabase):
         
         #self.save_data_to_MDB(item="shares_outstanding", data_list=data_list)
 
-    # 取得最新的ticker_list
-    def get_latest_univ_ticker_list(self, univ_name):
-        ticker_df = self.get_item_df(item=univ_name, method="by_num", num=1)
-        return list(ticker_df.iloc[-1])
-
-    # deprecated
-    def get_stock_news_dict(self, ticker_list, start_date):
-        news_meta_dict = dict()
-        all_news_df = self.get_item_df(item="raw_stock_news", method="by_date", start_date=start_date)
-        for ticker in ticker_list:
-            # 篩選出包含此ticker的news
-            news_df = all_news_df[all_news_df["ticker"].apply(lambda x: ticker in x)]
-            if len(news_df) == 0:
-                continue
-            
-            # 因資料庫中可能存在重複的新聞，故刪除
-            news_df = news_df.drop_duplicates("url")
-            news_df = news_df.loc[:, ["title", "url"]]
-            news_df = news_df.reset_index()
-            news_df["date"] = datetime2str_list(news_df["date"])
-            news_meta_list = news_df.to_dict("records")
-            news_meta_dict[ticker] = news_meta_list
-
-        return news_meta_dict
+    

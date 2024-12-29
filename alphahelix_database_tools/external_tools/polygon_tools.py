@@ -8,8 +8,8 @@ from alphahelix_database_tools.utils import datetime2str
 
 # Note：已去除存檔，改為回傳data dict
 # 自polygon下載EOD價量相關資料，若無指定起始/結束日期，則自動以上次更新日期的後一日開始抓取資料，更新至今日
-def save_stock_priceVolume_from_Polygon(API_key, start_date=None, end_date=None, adjust=False):
-    def _save_stock_priceVolume_from_Polygon_singleDate(API_key, date, item_list, data_dict, adjust):
+def save_stock_OHLCV_from_Polygon(API_key, start_date=None, end_date=None, adjust=False):
+    def _save_stock_OHLCV_from_Polygon_singleDate(API_key, date, item_list, data_dict, adjust):
         # 將boolean value串連url string，用於呼叫API
         if adjust==True:
             adjust_flag = "true"
@@ -42,15 +42,15 @@ def save_stock_priceVolume_from_Polygon(API_key, start_date=None, end_date=None,
     # 列出起始/結束日，中間的日期，並轉為字串形式
     date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date, freq='d'))))
     threads = list()
-    # 逐日下載資料，儲存與字典當中
     
+    # 逐日下載資料，儲存與字典當中
     item_list = ["open", "high", "low", "close", "volume", "avg_price", "transaction_num"]
     data_dict = dict()
     for item in item_list:
         data_dict[item] = dict()
 
     for index, date in enumerate(date_range_list, 1):
-        t = Thread(target=_save_stock_priceVolume_from_Polygon_singleDate, 
+        t = Thread(target=_save_stock_OHLCV_from_Polygon_singleDate, 
             args=(API_key, date, item_list, data_dict, adjust))
         t.start()  # 開啟線程，在線程之間設定間隔，避免資料源過載或爬蟲阻擋
         time.sleep(0.1)
@@ -63,7 +63,7 @@ def save_stock_priceVolume_from_Polygon(API_key, start_date=None, end_date=None,
         
     return data_dict
 
-def save_stock_split_from_Polygon(API_key, date_list):
+def save_stock_split_from_Polygon(API_key, start_date=None, end_date=None):
     def _save_stock_split_from_Polygon_singleDate(API_key, date, data_dict):
         url = "https://api.polygon.io/v3/reference/splits?execution_date={date}&apiKey={API_key}".format(date=date, API_key=API_key)
         data_json = requests.get(url).json()
@@ -73,11 +73,13 @@ def save_stock_split_from_Polygon(API_key, date_list):
             df["adjust_factor"] = df["split_to"] / df["split_from"]
             df = df.pivot(index="execution_date", columns="ticker", values="adjust_factor").T
             data_dict[date] = df.sort_index()
-
+    
+    date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date, freq='d'))))
+    
     data_dict = dict()
     threads = list()  # 儲存線程以待關閉
     try:
-        for index, date in enumerate(date_list, 1):
+        for index, date in enumerate(date_range_list, 1):
             t = Thread(target=_save_stock_split_from_Polygon_singleDate, 
                         args=(API_key, date, data_dict))
             t.start()  # 開啟線程
@@ -85,7 +87,7 @@ def save_stock_split_from_Polygon(API_key, date_list):
             #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
             threads.append(t)
-            percentage = 100*round(index/len(date_list), 2)            
+            percentage = 100*round(index/len(date_range_list), 2)            
             logging.info("[{date}][split] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))                
         for t in threads:
             t.join()
@@ -96,6 +98,9 @@ def save_stock_split_from_Polygon(API_key, date_list):
     return data_dict
 
 def save_stock_cash_dividend_from_Polygon(API_key, start_date, end_date, div_type):
+    """
+    div_type: ex_dividend_date / pay_date
+    """
     def _save_stock_cash_dividend_from_Polygon_singleDate(API_key, date, div_type, data_dict):
         #只下載現金股利（CD）
         url = "https://api.polygon.io/v3/reference/dividends?{0}={1}&apiKey={2}&dividend_type=CD".format(div_type, date, API_key)
@@ -103,7 +108,7 @@ def save_stock_cash_dividend_from_Polygon(API_key, start_date, end_date, div_typ
         results_dict = data_json["results"]
         if len(results_dict) > 0:
             df = pd.DataFrame(results_dict)
-            df = df[df["currency"]=="USD"]
+            df = df[df["currency"]=="USD"] # 只取美元股利（外幣股利暫不處理）
             d = df.pivot(index="ticker", columns=div_type, values="cash_amount").to_dict()
             data_dict.update(d)
     
@@ -116,7 +121,7 @@ def save_stock_cash_dividend_from_Polygon(API_key, start_date, end_date, div_typ
             t = Thread(target=_save_stock_cash_dividend_from_Polygon_singleDate, 
                         args=(API_key, date, div_type, data_dict))
             t.start()  # 開啟線程
-            #在線程之間設定間隔（0.5秒），避免資料源過載或爬蟲阻擋
+            #在線程之間設定間隔（0.1秒），避免資料源過載或爬蟲阻擋
             time.sleep(0.1)
             threads.append(t)
             percentage = 100*round(index/len(date_range_list), 2)            

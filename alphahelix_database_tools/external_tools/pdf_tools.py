@@ -2,6 +2,7 @@ import fitz  # fitz（PyMuPDF）擷取PDF文字 &圖片
 import re, os, tempfile, requests, logging
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
+import tiktoken
 
 # import nltk
 # from nltk.tokenize import sent_tokenize, word_tokenize
@@ -12,16 +13,42 @@ from concurrent.futures import ThreadPoolExecutor
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def clean_gibberish_text(text):
-    # 定義正則表達式來匹配亂碼或無意義的符號組合，但排除 ':' 和 '：'
-    # [^\w\s:：]{1}：匹配單個非單詞字符或空白符號（如 %, ;, -），但不包括 ':' 和 '：'
-    # \b\d+\b：匹配孤立的數字
-    # \b[a-zA-Z]{1,2}\b：匹配孤立的1-2位英文字母
-    pattern = r"[^\w\s:：]{1}|\b\d+\b|\b[a-zA-Z]{1,2}\b"
-    # 使用正則表達式替換匹配到的部分
-    cleaned_text = re.sub(pattern, '', text)
-    # 去除多餘的空白
+import re
+
+def clean_gibberish_text(raw_text):
+    """
+    Cleans gibberish text by:
+    - Removing standalone numbers
+    - Removing standalone single characters (except 'a' and 'I')
+    - Removing isolated 1-2 character English words
+    - Removing non-word characters except ':' and '：'
+    - Removing excessive or fragmented punctuation (e.g., '...', ', , ,')
+    - Normalizing whitespace
+    
+    Args:
+        raw_text (str): The text to clean.
+
+    Returns:
+        str: The cleaned text.
+    """
+    # Remove standalone numbers
+    cleaned_text = re.sub(r'\b\d+\b', '', raw_text)
+    
+    # Remove standalone single characters (excluding 'a' and 'I' for grammar)
+    cleaned_text = re.sub(r'\b(?!a\b|I\b)[a-zA-Z]\b', '', cleaned_text)
+    
+    # Remove isolated 1-2 character English words
+    cleaned_text = re.sub(r'\b[a-zA-Z]{1,2}\b', '', cleaned_text)
+    
+    # Remove non-word characters except ':' and '：'
+    cleaned_text = re.sub(r'[^\w\s:：.,?!]', '', cleaned_text)
+    
+    # Remove excessive or fragmented punctuation (e.g., '. . . .', ', , ,')
+    cleaned_text = re.sub(r'([.,?!])(?:\s*\1\s*)+', r'\1', cleaned_text)
+    
+    # Normalize whitespace (remove extra spaces, tabs, newlines)
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+    
     return cleaned_text
 
 def count_text_length(text):
@@ -58,6 +85,10 @@ def get_pdf_text_from_url(url):
             logging.warning(f"[SERVER][PDF][Error {response.status_code}]")
             return []
 
+# def get_pdf_page_length(file_path):
+#     PDF = fitz.open(file_path)
+#     return len(PDF)
+
 def _extract_raw_text_from_pdf(file_path):
     raw_text = ""
     PDF = fitz.open(file_path)
@@ -66,7 +97,34 @@ def _extract_raw_text_from_pdf(file_path):
         _text = page.get_text()  # 提取頁面上的所有文字
         raw_text += (_text)
     return raw_text
+
+def truncate_text_to_token_limit(text, token_limit=8000, encoding_name="cl100k_base"):
+    """
+    Truncate the text to ensure it does not exceed the specified token limit.
     
+    Args:
+        text (str): The input text to be truncated.
+        token_limit (int): The maximum number of tokens allowed. Default is 8000.
+        encoding_name (str): The name of the encoding to use with tiktoken.
+        
+    Returns:
+        str: The truncated text, ensuring it is within the token limit.
+    """
+    # Get the specified encoding
+    enc = tiktoken.get_encoding(encoding_name)
+    
+    # Encode the text into tokens
+    tokens = enc.encode(text)
+    
+    # Truncate tokens if they exceed the limit
+    if len(tokens) > token_limit:
+        tokens = tokens[:token_limit]
+    
+    # Decode the truncated tokens back into text
+    truncated_text = enc.decode(tokens)
+    
+    return truncated_text
+
 def delete_disclosure_section(text, window_size=20, keyword_density=0.2):
     keywords = [
         "disclosures", "important disclosure", "analyst certification",

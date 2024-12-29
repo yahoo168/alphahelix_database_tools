@@ -318,7 +318,6 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
         return internal_stock_report_meta_list
     
     def get_market_report_upload_record(self, monitor_period_days=30):
-        monitor_period_days = 30
         collection = self.MDB_client["raw_content"]["raw_stock_report_non_auto"]
 
         # 计算时间戳，获取近 monitor_period_days 天的数据
@@ -326,7 +325,7 @@ class CloudPoolListDatabase(AbstractCloudDatabase):
 
         # 使用 MongoDB 的聚合操作来直接获取每个 (ticker, source) 下的最大 upload_timestamp 和 data_timestamp
         pipeline = [
-            {"$match": {"upload_info.upload_timestamp": {"$gte": start_timestamp}}},
+            {"$match": {"upload_info.upload_timestamp": {"$gte": start_timestamp}, "is_deleted": False}},
             {"$group": {
                 "_id": {"ticker": {"$arrayElemAt": ["$tickers", 0]}, "source": "$source"},
                 "ticker": {"$first": {"$arrayElemAt": ["$tickers", 0]}},

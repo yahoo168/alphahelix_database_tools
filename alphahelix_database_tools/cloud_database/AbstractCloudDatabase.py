@@ -57,6 +57,7 @@ class AbstractCloudDatabase():
         self.cluster_uri_dict = {
             # cluster: alphahelixdatabase（用於量化交易系統）
             "quant": f"mongodb+srv://{username}:{password}@alphahelixdatabase.nadkzwd.mongodb.net/?retryWrites=true&w=majority&appName=alphahelixDatabase",
+            
             # cluster: articles（用於內部系統）
             "articles": f"mongodb+srv://{username}:{password}@articles.zlnaiap.mongodb.net/?retryWrites=true&w=majority&appName=articles"
         }
@@ -132,24 +133,6 @@ class AbstractCloudDatabase():
         
         # 插入新的doc
         self.cur_col.insert_many(data_list)
-
-    # ## decorator：設定star_date與end_date
-    # def set_default_dates(start_shift:int=0, end_shift:int=0):
-    #     @wraps(func)
-    #     def _shift_default_dates(func):
-    #         @wraps(func)
-    #         def wrapper(self, *args, **kwargs):
-    #             print(kwargs)
-    #             if ("start_date" not in kwargs) or (kwargs['start_date'] is None):
-    #                 kwargs["start_date"] = datetime2str(self.get_latest_data_date(item=kwargs["item"]) 
-    #                                                     + timedelta(days=start_shift))
-    #             if ("end_date" not in kwargs) or (kwargs['end_date'] is None):
-    #                 kwargs['end_date'] = shift_days_by_strDate(TODAY_DATE_STR, end_shift)
-                
-    #             return func(self, *args, **kwargs)
-            
-    #         return wrapper
-    #     return _shift_default_dates
             
     def get_latest_data_date(self, item:str, date_format:str="datetime") -> Union[datetime, str]: 
         self._locate_collection(item)
