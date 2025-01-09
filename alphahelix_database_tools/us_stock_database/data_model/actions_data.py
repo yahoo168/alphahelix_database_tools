@@ -1,4 +1,4 @@
-from alphahelix_database_tools.UsStockDatabase.DataAccessObjects.BaseDAO import BaseDAO
+from .base_data import BaseDAO
 import pandas as pd
 
 class ActionsBaseDAO(BaseDAO):

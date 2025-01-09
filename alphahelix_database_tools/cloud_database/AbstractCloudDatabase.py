@@ -5,7 +5,7 @@ from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
 from alphahelix_database_tools.utils.datetime_utils import *
-from alphahelix_database_tools.external_tools.polygon_tools import *
+from alphahelix_database_tools.data_scrapers.polygon_tools import *
 
 # 日期格式原則：對外函數的input為str(YYYY-MM-DD)，output為datetime，內部函數的input/output皆為datetime
 

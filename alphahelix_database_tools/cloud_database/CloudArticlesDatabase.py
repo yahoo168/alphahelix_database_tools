@@ -6,7 +6,7 @@ from jinja2 import Template #type: ignore
 
 from dotenv import load_dotenv #type: ignore
 
-from alphahelix_database_tools.external_tools.news_tools import *
+from alphahelix_database_tools.data_scrapers.news_tools import *
 from alphahelix_database_tools.external_tools.openai_tools import call_OpenAI_API, truncate_text_to_token_limit, get_embedding
 from alphahelix_database_tools.external_tools.pdf_tools import get_pdf_text_from_url, clean_gibberish_text
 from alphahelix_database_tools.external_tools.google_tools import GoogleCloudStorageTools

@@ -1,7 +1,7 @@
 from pymongo import MongoClient, UpdateOne
 from datetime import datetime, timezone
 
-class GPUModelDAO:
+class GpuDataModel:
     def __init__(self):
         username = "yahoo168"
         password = "yahoo210"

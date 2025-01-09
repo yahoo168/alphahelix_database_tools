@@ -1,4 +1,4 @@
-from alphahelix_database_tools.UsStockDatabase.DataAccessObjects.BaseDAO import BaseDAO
+from .base_data import BaseDAO
 
 class PriceVolumeBaseDAO(BaseDAO):
     def __init__(self, collection_name: str, uri: str):
@@ -35,3 +35,6 @@ class OpenToOpenReturnDAO(PriceVolumeBaseDAO):
     def __init__(self, uri):
         super().__init__("o2o_ret", uri)
         
+class SharesOutstandingDAO(PriceVolumeBaseDAO):
+    def __init__(self, uri):
+        super().__init__("shares_outstanding", uri)

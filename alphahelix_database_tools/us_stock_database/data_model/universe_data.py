@@ -1,10 +1,5 @@
-from alphahelix_database_tools.UsStockDatabase.DataAccessObjects.BaseDAO import BaseDAO
-from alphahelix_database_tools.utils.datetime_utils import str2datetime, datetime2str
-
-from typing import List, Union
-from datetime import datetime, timedelta
+from .base_data import BaseDAO
 import pandas as pd
-import logging
 
 class UniverseDAO(BaseDAO):
     def __init__(self, collection_name: str, uri: str):
@@ -80,4 +75,14 @@ class UnivNDX100DAO(UniverseDAO):
 class UnivRAY3000DAO(UniverseDAO):
     def __init__(self, uri):
         collection_name = "univ_ray3000"
+        super().__init__(collection_name, uri)
+        
+class UnivUsStock(UniverseDAO):
+    def __init__(self, uri):
+        collection_name = "univ_us_stock"
+        super().__init__(collection_name, uri)
+        
+class UnivUsETF(UniverseDAO):
+    def __init__(self, uri):
+        collection_name = "univ_us_etf"
         super().__init__(collection_name, uri)

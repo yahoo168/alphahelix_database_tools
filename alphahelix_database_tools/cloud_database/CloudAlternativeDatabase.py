@@ -1,6 +1,6 @@
 from .AbstractCloudDatabase import *
-from alphahelix_database_tools.UsStockDatabase.DataAccessObjects.AlternativeDAO import GPUModelDAO
-from alphahelix_database_tools.external_tools.gpu_data_scraper import fetch_gpu_pricing
+from alphahelix_database_tools.data_models.alternative_data_model import GpuDataModel #type: ignore
+from alphahelix_database_tools.data_scrapers.gpu_data_scraper import fetch_gpu_pricing
 
 class CloudAlternativeDatabase(AbstractCloudDatabase):
     def __init__(self, config_folder_path=None):
@@ -9,7 +9,7 @@ class CloudAlternativeDatabase(AbstractCloudDatabase):
     
     def save_cloud_gpu_pricing_data(self):
         # 建立 DAO 實例
-        gpu_dao = GPUModelDAO()
+        gpu_dao = GpuDataModel()
         source_list = ["coreweave", "cudocompute", "runpod", "datacrunch"]
         
         # 從各個 source 獲取數據並寫入資料庫

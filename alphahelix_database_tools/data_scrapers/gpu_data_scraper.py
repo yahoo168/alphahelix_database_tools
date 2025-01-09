@@ -2,10 +2,16 @@ import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 import re
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 def fetch_gpu_pricing(source):
     if source == "coreweave":
-        return _fetch_gpu_pricing_from_coreweave()
+        logging.warning("CoreWeave pricing is not available at the moment.")
+        return None
+        # return _fetch_gpu_pricing_from_coreweave()
+    
     elif source == "cudocompute":
         return _fetch_gpu_pricing_from_cudocompute()
     elif source == "runpod":
@@ -16,10 +22,7 @@ def fetch_gpu_pricing(source):
         print("Invalid source specified. Supported sources: 'cudocompute', 'runpod'.")
         return None
 
-from bs4 import BeautifulSoup
-import requests
-import re
-
+# 待修改：網頁結構改變，需要重新定位元素
 def _fetch_gpu_pricing_from_coreweave():
     """
     Fetch GPU pricing from CoreWeave.
@@ -30,13 +33,13 @@ def _fetch_gpu_pricing_from_coreweave():
         response = requests.get(url, timeout=10)
         response.raise_for_status()  # Raise an error for HTTP issues
     except requests.exceptions.RequestException as error:
-        print(f"Error fetching the URL: {error}")
+        logging.warning(f"Error fetching the URL: {error}")
         return None
 
     soup = BeautifulSoup(response.text, "html.parser")
-    table = soup.find("div", class_="table")
+    table = soup.find("div", class_="table-v2-header")
     if not table:
-        print("Unable to locate the pricing table on the page.")
+        logging.warning("Unable to locate the pricing table on the page.")
         return None
 
     gpu_data_list = []

@@ -1,13 +1,11 @@
 from pymongo import MongoClient
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, BulkWriteError
 
 from datetime import datetime
+import logging
 import pandas as pd
 import numpy as np
-
-import logging
 from typing import List, Tuple, Union
-# from alphahelix_database_tools.utils.datetime_utils import datetime2str, str2datetime
 
 class BaseDAO:
     def __init__(self, db_name, collection_name, uri):
@@ -22,8 +20,8 @@ class BaseDAO:
         - unique_key: 指定檢查唯一性的 key（可選）
         """
         if unique_key:
-            # 為 unique_key 創建降序索引（使用 unique=True 參數，可確保MongoDB中不會有重複值，否則insert時會報錯）
-            self.collection.create_index([(unique_key, -1)], unique=True)
+            # 為 unique_key 創建降序索引，若已存在則跳過
+            self.ensure_index([(unique_key, -1)], unique=True)
 
         try:
             # 插入文檔
@@ -32,6 +30,24 @@ class BaseDAO:
             logging.warning(f"Duplicate value for key '{unique_key}' with value '{document.get(unique_key)}'. Skipping insert.")
             return None
 
+    def ensure_index(self, keys, unique=True):
+        """
+        確保索引存在，根據名稱檢查是否需要創建索引。
+        - keys: 索引鍵值對列表，例如 [("field_name", 1)]
+        - unique: 是否唯一索引（默認為 False）
+        """
+        index_name = "_".join([f"{k}_{v}" for k, v in keys])  # 基於字段生成索引名稱
+        index_info = self.collection.index_information()
+
+        if index_name in index_info:
+            logging.info(f"Index {index_name} already exists. Skipping creation.")
+            return
+
+        # 創建索引
+        self.collection.create_index(keys, unique=unique, name=index_name)
+        logging.info(f"Index {index_name} created successfully.")
+
+    
     def insert_many(self, documents, unique_key=None):
         """
         插入多筆資料，並在用戶指定 unique_key 時自動建立索引。
@@ -39,8 +55,8 @@ class BaseDAO:
         - unique_key: 指定檢查唯一性的 key（可選）
         """
         if unique_key:
-            # 為 unique_key 創建降序索引
-            self.collection.create_index([(unique_key, -1)], unique=True)
+            # 為 unique_key 創建降序索引，若已存在則跳過
+            self.ensure_index([(unique_key, -1)], unique=True)
 
         to_insert = []
         for document in documents:
@@ -54,18 +70,44 @@ class BaseDAO:
             else:
                 logging.warning("No documents were inserted due to duplicate keys.")
                 return []
-        except DuplicateKeyError as e:
-            logging.warning(f"Duplicate key error encountered during bulk insert: {e.details}. Skipping duplicates.")
+        
+        except BulkWriteError as e:
+            logging.warning(f"Bulk write error: {e.details}. Skipping duplicates.")
             return []
 
     def find(self, query, projection=None, sort=None, limit=None):
-        """查詢資料"""
-        return list(self.collection.find(query, projection, sort=sort, limit=limit))
+        """
+        查詢資料。
+        Args:
+            query (dict): 查詢條件。
+            projection (dict, optional): 返回字段投影。
+            sort (list, optional): 排序條件。
+            limit (int, optional): 最大返回數量。
+
+        Returns:
+            list: 查詢結果。
+        """
+        # 構建查詢參數
+        query_params = {
+            "filter": query,
+            "projection": projection,
+        }
+        if sort:
+            query_params["sort"] = sort
+        if limit is not None:  # 僅在 limit 不為 None 時傳遞，否則會報錯
+            query_params["limit"] = limit
+
+        return list(self.collection.find(**query_params))
+
     
     def find_one(self, query, projection=None, sort=None):
         """查詢資料"""
         return self.collection.find_one(query, projection, sort=sort)
 
+    def distinct(self, field, query):
+        """查詢唯一值"""
+        return self.collection.distinct(field, query)
+    
     def update_one(self, query, update, upsert=False):
         """更新單筆資料"""
         return self.collection.update_one(query, {"$set": update}, upsert=upsert)
