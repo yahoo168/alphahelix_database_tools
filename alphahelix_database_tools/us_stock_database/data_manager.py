@@ -2,13 +2,16 @@ from datetime import datetime
 from typing import Union, List, Dict
 from functools import lru_cache
 import logging
+import numpy as np
+import os
 
+from alphahelix_database_tools.utils.format_utils import get_aligned_df_list
 from .data_model import * # Import all DAO classes
 
 class UsStockDataManager:
     def __init__(self, username, password):
         self.uri = f"mongodb+srv://{username}:{password}@usstockdata.x1hayah.mongodb.net/?retryWrites=true&w=majority&appName=UsStockData"
-
+        
         # 整併 DAO 類別與能力描述
         self.dao_info = {
             # Price & Volume
@@ -38,9 +41,10 @@ class UsStockDataManager:
             "market_status": {"class": MarketStatusDAO, "is_universe_specifiable": False, "is_tickers_specifiable": False},
             "gics_code": {"class": GicsCodeDAO},
             "gics_mapping": {"class": GicsMappingDAO},
+            "error_report": {"class": ErrorReportDAO},
             
-        }
-
+        }    
+    
     @lru_cache # 緩存 DAO 實例（避免重複初始化）
     def _get_dao_instance(self, item: str):
         """
@@ -82,7 +86,7 @@ class UsStockDataManager:
                 raise ValueError(f"無法解析時間參數: {timestamp}") from e
         raise ValueError(f"無效的時間參數類型: {type(timestamp)}")
 
-    def _get_universe_tickers(
+    def get_universe_tickers(
         self, universe_item: str, start_timestamp: datetime = None, end_timestamp: datetime = None, num: int = None
     ) -> List[str]:
         """
@@ -98,26 +102,13 @@ class UsStockDataManager:
             List[str]: Universe 中的 tickers 列表。
         """
         universe_dao = self._get_dao_instance(universe_item)
-
-        # 如果指定了時間範圍
-        if start_timestamp and end_timestamp:
-            universe_df = universe_dao.get_item_df_by_datetime(
-                start_timestamp=start_timestamp, end_timestamp=end_timestamp
-            )
-        # 如果指定了筆數
-        elif num:
-            universe_df = universe_dao.get_item_df_by_num(num=num)
-        else:
-            raise ValueError("必須指定 start_timestamp 和 end_timestamp 或 num")
-
-        # 提取 tickers
-        return universe_df.columns.to_list()
+        return universe_dao.get_universe_tickers(start_timestamp, end_timestamp, num)
     
     def get_latest_universe_tickers(self, universe_item: str) -> List[str]:
         """
         獲取指定 Universe 的最新 tickers
         """
-        return self._get_universe_tickers(universe_item, num=1)
+        return self.get_universe_tickers(universe_item, num=1)
     
     def get_trade_date_list(self, start_timestamp: Union[datetime, str], end_timestamp: Union[datetime, str], format:str="datetime") -> List[Union[datetime, str]]:
         # 處理時間格式（若為字串則轉換為 datetime）
@@ -167,6 +158,17 @@ class UsStockDataManager:
             logging.error(f"[GET][{item}][last_date] An error occurred: {e}")
             return None
     
+    def get_latest_data_date_dict(self, item_list):
+        """
+        獲取指定資料項目的最新日期(dict)
+        """
+        latest_data_date_dict = {
+            item: self.get_latest_data_date(item)
+            for item in item_list
+        }
+
+        return latest_data_date_dict
+    
     def get_item_df(
         self,
         item: str,
@@ -174,8 +176,6 @@ class UsStockDataManager:
         start_timestamp: Union[None, str, datetime] = None,
         end_timestamp: Union[str, datetime] = "9999-12-31",
         num: int = None,
-        query: dict = None,
-        projection: dict = None,
         universe_item: str = None,
         tickers: List[str] = None,
     ) -> pd.DataFrame:
@@ -188,8 +188,6 @@ class UsStockDataManager:
             start_timestamp (Union[None, str, datetime], optional): 開始日期。
             end_timestamp (Union[str, datetime], optional): 結束日期。預設為 "9999-12-31"。
             num (int, optional): 數據筆數，僅在 method="by_num" 時有效。
-            query (dict, optional): 額外的查詢條件。
-            projection (dict, optional): 投影條件。
             universe_item (str, optional): 範圍所屬的 Universe 名稱。
             tickers (List[str], optional): 自定義的 tickers 列表。
 
@@ -212,18 +210,20 @@ class UsStockDataManager:
 
         # 獲取範圍（spx500 或特定 tickers）
         if universe_item:
-            tickers = self._get_universe_tickers(
+            tickers = self.get_universe_tickers(
                 universe_item, start_timestamp=start_timestamp, end_timestamp=end_timestamp, num=num
             )
+        
         if tickers:
             projection = {f"values.{ticker}": 1 for ticker in tickers}
+        else:
+            projection = None
 
         # 驗證方法
         if method == "by_date":
             item_df = dao_instance.get_item_df_by_datetime(
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
-                query=query or {},
                 projection=projection or {},
             )
         elif method == "by_num":
@@ -233,13 +233,68 @@ class UsStockDataManager:
             item_df = dao_instance.get_item_df_by_num(
                 end_timestamp=end_timestamp,
                 num=num,
-                query=query or {},
                 projection=projection or {},
             )
         else:
             raise ValueError("method 必須是 'by_date' 或 'by_num'")
-
+        
+        # 部分column（ticker）可能為Nan，進行刪除
+        if np.nan in item_df.columns:
+            item_df = item_df.drop(np.nan, axis=1)
+            
         return item_df.sort_index(axis=0).sort_index(axis=1)
+    
+    def get_item_df_dict(self,
+        item_list: List[str],
+        method: str,
+        start_timestamp: Union[None, str, datetime] = None,
+        end_timestamp: Union[str, datetime] = "9999-12-31",
+        num: int = None,
+        universe_item: str = None,
+        tickers: List[str] = None,
+        if_align: bool = True):
+        
+        item_df_list = list()
+        for item in item_list:
+            logging.info(f"[INFO][{item}][正在取出資料...]")
+            item_df = self.get_item_df(item, method, start_timestamp, end_timestamp, num, universe_item, tickers)
+            item_df_list.append(item_df)
+
+        if if_align == True:
+            item_df_list = get_aligned_df_list(item_df_list)
+
+        return dict(zip(item_list, item_df_list))
+    
+    def get_stock_adjust_factor_df(self, start_timestamp=None, end_timestamp=None, method="backward"):
+        """
+        根據股票分割資料，計算股票的調整因子（adjust factor），預設為backward，即使得最新股價等於未調整股價
+        """
+        def _cal_stock_adjust_factor_df(stock_splits_df, date_list, method):
+            adjust_ticker_list = stock_splits_df.columns
+            adjust_factor_df = pd.DataFrame(index=date_list, columns=adjust_ticker_list)
+            adjust_factor_df[adjust_ticker_list] = stock_splits_df[adjust_ticker_list]    
+            adjust_factor_df = adjust_factor_df.fillna(1)
+            adjust_factor_df[adjust_factor_df==0] = 1
+            
+            if method == "forward":
+                adjust_factor_df = adjust_factor_df.cumprod()
+                
+            elif method == "backward":
+                cumulative_splits = adjust_factor_df.cumprod().iloc[-1, :]
+                adjust_factor_df = (1/adjust_factor_df).cumprod() * cumulative_splits
+                adjust_factor_df = 1/adjust_factor_df
+
+            else:
+                raise Exception("method typo")
+
+            adjust_factor_df.index = pd.to_datetime(adjust_factor_df.index)
+            return adjust_factor_df
+        
+        trade_date_list = self.get_trade_date_list(start_timestamp=start_timestamp, end_timestamp=end_timestamp)
+        stock_splits_df = self.get_item_df(item="stock_split", method="by_date", start_timestamp=start_timestamp, end_timestamp=end_timestamp)
+        adjust_factor_df = _cal_stock_adjust_factor_df(stock_splits_df, date_list=trade_date_list, method=method)
+
+        return adjust_factor_df
     
     def get_gics_code_by_level(self, level: int) -> dict:
         """
@@ -269,3 +324,8 @@ class UsStockDataManager:
         dao_instance = self._get_dao_instance("gics_code")
         return dao_instance.fetch_tickers_by_gics_name(level, name)
     
+    def get_latest_error_report(self):
+        """
+        獲取最新的錯誤檢測報告
+        """
+        return self._get_dao_instance("error_report").get_latest_error_report()

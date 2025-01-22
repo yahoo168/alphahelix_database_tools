@@ -1,4 +1,5 @@
 import re
+import pandas as pd
 
 # 将dict标准化key（避免LLM随即性导致key不一致）
 def standardize_key(key):
@@ -41,3 +42,38 @@ def remove_duplicates_by_key(dict_list, key):
             seen_values.add(value)
     
     return unique_dict_list
+
+# 將給定的數個df，對齊coloumn與index，空值補Nan
+def get_aligned_df_list(df_list):
+    index_list, columns_list = list(), list()
+    
+    for item_df in df_list:
+        index_list.append(set(item_df.index))
+        columns_list.append(set(item_df.columns))
+
+    index_series = pd.Series(list(index_list[0].union(*index_list))).dropna()
+    columns_series = pd.Series(list(columns_list[0].union(*columns_list))).dropna()
+    
+    aligned_item_df_list = list()
+    for item_df in df_list:
+        aligned_item_df = item_df.reindex(index=index_series, columns=columns_series)
+        aligned_item_df = aligned_item_df.sort_index()
+        aligned_item_df_list.append(aligned_item_df)
+
+    return aligned_item_df_list
+
+# 合併兩個key有部分重疊，然而value（也是dict）不重疊的dict，將重疊的key的value合併，並保留不重疊部分的key
+def combine_dict(dict1, dict2):
+    merged_dict = {}
+
+    # 合併第一個字典到結果字典
+    for key, value in dict1.items():
+        merged_dict[key] = value
+
+    # 合併第二個字典到結果字典
+    for key, value in dict2.items():
+        if key in merged_dict:
+            merged_dict[key].update(value)
+        else:
+            merged_dict[key] = value
+    return merged_dict

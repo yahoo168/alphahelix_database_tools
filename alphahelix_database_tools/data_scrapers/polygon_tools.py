@@ -11,15 +11,18 @@ from alphahelix_database_tools.utils import datetime2str
 def save_stock_OHLCV_from_Polygon(API_key, start_date=None, end_date=None, adjust=False):
     def _save_stock_OHLCV_from_Polygon_singleDate(API_key, date, item_list, data_dict, adjust):
         # 將boolean value串連url string，用於呼叫API
-        if adjust==True:
-            adjust_flag = "true"
-        elif adjust==False:
-            adjust_flag = "false"
+        adjust_flag = "true" if adjust else "false"
 
-        url = "https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{date}?adjusted={adjust_flag}&apiKey={API_key}".format(date=date, adjust_flag=adjust_flag, API_key=API_key)
+        url = (
+                f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{date}"
+                f"?adjusted={adjust_flag}&apiKey={API_key}"
+            )
+        
         data_json = requests.get(url).json()
+        
         # status DELAYED代表美股盤後交易時段，約台灣時間中午12點方能取得昨日的正式收盤價（確切時間待確定）
         if (data_json["status"] in ["NOT_AUTHORIZED", "DELAYED"]) or (data_json["queryCount"] == 0):
+            logging.warning(f"[Polygon][{date}][OHLCV] 資料狀態異常({data_json["status"]})，請稍後再試")
             return False
         # 將polygon回傳資料轉化為dataframe
         df = pd.DataFrame(data_json["results"])
@@ -43,11 +46,9 @@ def save_stock_OHLCV_from_Polygon(API_key, start_date=None, end_date=None, adjus
     date_range_list = list(map(lambda x:datetime2str(x), list(pd.date_range(start_date, end_date, freq='d'))))
     threads = list()
     
-    # 逐日下載資料，儲存與字典當中
+    # 逐日下載資料，儲存在dict中
     item_list = ["open", "high", "low", "close", "volume", "avg_price", "transaction_num"]
-    data_dict = dict()
-    for item in item_list:
-        data_dict[item] = dict()
+    data_dict = {item: {} for item in item_list}
 
     for index, date in enumerate(date_range_list, 1):
         t = Thread(target=_save_stock_OHLCV_from_Polygon_singleDate, 
@@ -56,7 +57,7 @@ def save_stock_OHLCV_from_Polygon(API_key, start_date=None, end_date=None, adjus
         time.sleep(0.1)
         threads.append(t)
         percentage = 100*round(index/len(date_range_list), 2)            
-        logging.info("[{date}][OHLCV] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))
+        logging.info("[Polygon][{date}][OHLCV] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))
 
     for t in threads:
         t.join()
@@ -88,7 +89,7 @@ def save_stock_split_from_Polygon(API_key, start_date=None, end_date=None):
             time.sleep(0.1)
             threads.append(t)
             percentage = 100*round(index/len(date_range_list), 2)            
-            logging.info("[{date}][split] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))                
+            logging.info("[Polygon][{date}][split] 資料下載中，完成度{percentage}%".format(date=date, percentage=percentage))                
         for t in threads:
             t.join()
     
@@ -105,12 +106,26 @@ def save_stock_cash_dividend_from_Polygon(API_key, start_date, end_date, div_typ
         #只下載現金股利（CD）
         url = "https://api.polygon.io/v3/reference/dividends?{0}={1}&apiKey={2}&dividend_type=CD".format(div_type, date, API_key)
         data_json = requests.get(url).json()
+        
+        # 確認資料狀態
+        if data_json["status"] != "OK":
+            logging.warning(f"[Polygon][{date}][dividends][{div_type}] 資料狀態異常({data_json["status"]})，請稍後再試")
+            return False
+        
         results_dict = data_json["results"]
         if len(results_dict) > 0:
             df = pd.DataFrame(results_dict)
-            df = df[df["currency"]=="USD"] # 只取美元股利（外幣股利暫不處理）
-            d = df.pivot(index="ticker", columns=div_type, values="cash_amount").to_dict()
+            df = df[df["currency"] == "USD"] # 只取美元股利（外幣股利暫不處理）
+            if len(df) > 0:
+                d = df.pivot(index="ticker", columns=div_type, values="cash_amount").to_dict()
+            else:
+                d = {date: {}}
+            
             data_dict.update(d)
+    
+    if div_type not in ["ex_dividend_date", "pay_date"]:
+        logging.warning(f"[Polygon][{date}][dividends][{div_type}] 資料類型錯誤，請檢查")
+        return False
     
     # 列出起始/結束日，中間的日期，並轉為字串形式
     data_dict = dict()
@@ -121,11 +136,10 @@ def save_stock_cash_dividend_from_Polygon(API_key, start_date, end_date, div_typ
             t = Thread(target=_save_stock_cash_dividend_from_Polygon_singleDate, 
                         args=(API_key, date, div_type, data_dict))
             t.start()  # 開啟線程
-            #在線程之間設定間隔（0.1秒），避免資料源過載或爬蟲阻擋
-            time.sleep(0.1)
+            time.sleep(0.1) #在線程之間設定間隔（0.1秒），避免資料源過載或爬蟲阻擋
             threads.append(t)
-            percentage = 100*round(index/len(date_range_list), 2)            
-            logging.info("[{date}][dividends][{div_type}] 資料下載中，完成度{percentage}%".format(date=date, div_type=div_type, percentage=percentage))                
+            percentage = 100*round(index/len(date_range_list), 2)         
+            logging.info(f"[Polygon][{date}][dividends][{div_type}] 資料下載中，完成度{percentage}%")                
         for t in threads:
             t.join()
     
@@ -152,7 +166,7 @@ def save_stock_shares_outstanding_from_Polygon(API_key, ticker_list, start_date,
             time.sleep(0.1)
             threads.append(t)
             percentage = 100*round(index/len(ticker_list), 2)            
-            logging.info("[{date}][{ticker}]流通股數下載中，完成度{percentage}%".format(date=date, ticker=ticker, percentage=percentage))
+            logging.info("[Polygon][{date}][{ticker}]流通股數下載中，完成度{percentage}%".format(date=date, ticker=ticker, percentage=percentage))
 
         for t in threads:
             t.join()
@@ -192,7 +206,7 @@ def save_stock_universe_ticker_from_polygon(API_key, universe_name, start_date, 
                 break
 
         data_dict[date] = ticker_list
-        logging.info("[SAVE][{universe_name}][{date}]成分股資料抓取完成".format(universe_name=universe_name, date=date))
+        logging.info("[Polygon][{universe_name}][{date}]成分股資料抓取完成".format(universe_name=universe_name, date=date))
     
     return data_dict
 
@@ -246,7 +260,7 @@ def save_stock_company_info_from_Polygon(API_key, ticker_list):
         time.sleep(0.1)
         threads.append(t)
         percentage = 100*round(index/len(ticker_list), 2)            
-        logging.info("[{ticker}]公司資訊下載中，完成度{percentage}%".format(ticker=ticker, percentage=percentage))
+        logging.info("[Polygon][{ticker}]公司資訊下載中，完成度{percentage}%".format(ticker=ticker, percentage=percentage))
 
     for t in threads:
         t.join()
@@ -258,23 +272,29 @@ def save_stock_company_info_from_Polygon(API_key, ticker_list):
 def save_stock_market_status_from_Polygon(API_key):
     url = "https://api.polygon.io/v1/marketstatus/upcoming?apiKey={}".format(API_key)
     data_json = requests.get(url).json()
-    # 因polygon可查找未來一年多的法定假日，故設定範圍為查詢日期之一年內
+    
+    # polygon會直接返回未來一年多的法定假日，故設定範圍為查詢日期之一年內
     start_date = datetime2str(datetime.today())
     end_date = datetime2str(datetime.today()+timedelta(days=365))
+    
     # 獲得法定假日之日期（holiday_series）
     df = pd.DataFrame(data_json)
     holiday_series = df[df["status"]=="closed"]["date"].drop_duplicates()
     holiday_series = holiday_series[(holiday_series>=start_date) & (holiday_series<=end_date)]
+    
     # 依照起始、結束日，建立空的market_status_df
     date_range_series = pd.Series(pd.date_range(start_date, end_date, freq='d'))
     market_status_series = pd.Series(index=date_range_series)
+    
     # 找出查詢區間內的週末（六日）日期
     is_weekend_series = date_range_series.apply(lambda x:x.day_name() in (['Saturday', 'Sunday']))
     weekend_series = date_range_series[is_weekend_series]
-    # 依照規則（1: 交易日, 0:六日休市, -1:非六日休市），填入market_status_df
+    
+    # 依照編碼規則填入（1: 交易日, 0: 六日休市, -1: 非六日休市）
     market_status_series[holiday_series] = -1
     market_status_series[weekend_series] = 0
     market_status_series = market_status_series.fillna(1)
+    
     return market_status_series
 
 def save_stock_news_from_Polygon(API_key, ticker, start_timestamp=None):
@@ -296,9 +316,9 @@ def save_stock_news_from_Polygon(API_key, ticker, start_timestamp=None):
             page_count += 1
             response = requests.get(next_url + f"&apiKey={API_key}")
             data_dict = response.json()
-            
+            # 若翻頁過程中，status不為OK，則中斷迴圈
             if data_dict.get("status") != "OK":
-                print(f"Error: {data_dict.get('status', 'Unknown error')}")
+                logging.error(f"Error: {data_dict.get('status', 'Unknown error')}")
                 break
             
             raw_news_meta_list += data_dict.get("results", [])

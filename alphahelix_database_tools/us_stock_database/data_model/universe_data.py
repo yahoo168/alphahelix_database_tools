@@ -1,5 +1,7 @@
 from .base_data import BaseDAO
 import pandas as pd
+from datetime import datetime
+from typing import List
 
 class UniverseDAO(BaseDAO):
     def __init__(self, collection_name: str, uri: str):
@@ -12,49 +14,70 @@ class UniverseDAO(BaseDAO):
         下市 ticker 格式：7 位數字 + 字母（D 或 Q）。
         """
         return [ticker for ticker in ticker_list if len(ticker) < 8]
-    
+        
     # 覆寫BaseDAO的原始資料轉換函數
-    def _transform_data_df(self, raw_ticker_df, exclude_delist=False):
-        """
-        將 ticker DataFrame 轉換為指定格式的 DataFrame。
+    def transform_data_df(self, ticker_df, exclude_delist=False):
+        if ticker_df.empty:
+            raise ValueError("ticker_df 為空，無法轉換")
 
-        行：日期。
-        列：曾經存在此 universe 的所有 ticker。
-        值：True（當日存在該 ticker），False（當日不存在該 ticker）。
-
-        Args:
-            raw_ticker_df (pd.DataFrame): 原始 ticker 的 DataFrame，每行是日期，每列是當日的 ticker。
-            exclude_delist (bool): 是否排除已下市的 ticker。預設為 False。
-
-        Returns:
-            pd.DataFrame: 格式化後的 ticker DataFrame。
-        """
-
-        # 確認輸入的 raw_ticker_df 是有效的 DataFrame
-        if raw_ticker_df.empty:
-            raise ValueError("raw_ticker_df 為空，無法轉換")
-
-        # 提取所有出現過的 ticker，去重並排除空值
-        all_universe_tickers = pd.unique(raw_ticker_df.values.flatten())
-        all_universe_tickers = [ticker for ticker in all_universe_tickers if pd.notna(ticker)]
-
-        # 建立空的 DataFrame，行：日期，列：所有的 ticker，值預設為 False
-        formatted_ticker_df = pd.DataFrame(
-            False,
-            index=raw_ticker_df.index,
-            columns=all_universe_tickers
-        )
-
-        # 填充 DataFrame 中的值：若 ticker 存在於當日，設為 True
-        for date, tickers in raw_ticker_df.iterrows():
-            formatted_ticker_df.loc[date, tickers.dropna()] = True
+        # 使用 stack 将 DataFrame 转换为长格式，忽略 NaN
+        stacked_df = ticker_df.stack().reset_index()
+        stacked_df.columns = ['data_timestamp', 'dummy_column', 'ticker']
+        
+        # 删除无意义的 dummy_column 和 NaN 的 ticker
+        stacked_df = stacked_df.drop(['dummy_column'], axis=1).dropna(subset=['ticker'])
+        
+        # 使用 crosstab 创建布尔矩阵
+        universe_df = pd.crosstab(
+            stacked_df['data_timestamp'],
+            stacked_df['ticker']
+        ).astype(bool)
 
         # 若需要排除已下市的 ticker
         if exclude_delist:
-            valid_tickers = self._remove_delist_ticker(formatted_ticker_df.columns.tolist())
-            formatted_ticker_df = formatted_ticker_df[valid_tickers]
+            valid_tickers = self._remove_delist_ticker(universe_df.columns.tolist())
+            universe_df = universe_df[valid_tickers]
+        
+        return universe_df
+    
+    def get_universe_tickers(self, start_timestamp: datetime = None, end_timestamp: datetime = None, num: int = None) -> List[str]:
+        """
+        根據指定的 Universe 項目和範圍，獲取 Universe 中的 tickers。
 
-        return formatted_ticker_df
+        Args:
+            start_timestamp (datetime, optional): 範圍開始日期。
+            end_timestamp (datetime, optional): 範圍結束日期。
+            num (int, optional): 對應的資料筆數。
+
+        Returns:
+            List[str]: Universe 中的 tickers 列表。
+        """
+        # 檢查輸入參數
+        if not ((start_timestamp and end_timestamp) or num):
+            raise ValueError("必須指定 start_timestamp 和 end_timestamp，或指定 num")
+
+        # 組裝查詢條件
+        query = {}
+        if start_timestamp and end_timestamp:
+            query["data_timestamp"] = {"$gte": start_timestamp, "$lte": end_timestamp}
+        elif num is not None and end_timestamp is not None:
+            query["data_timestamp"] = {"$lte": end_timestamp}
+        
+        # 執行查詢
+        result = self.find(
+            query=query, 
+            projection={"values": 1, "_id": 0}, 
+            sort=[("data_timestamp", -1)], 
+            limit=num
+        )
+
+        # 提取並展開所有 values，去重並排序
+        tickers = set()
+        for item in result:
+            # 確保 item["values"] 是列表，並展開到集合中
+            tickers.update(item.get("values", []))
+        
+        return sorted(tickers)
 
 class UnivSPX500DAO(UniverseDAO):
     def __init__(self, uri):

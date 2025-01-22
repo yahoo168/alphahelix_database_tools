@@ -7,13 +7,19 @@ from functools import wraps
 from bson import ObjectId
 
 # 可轉換為帶時區的UTC格式（Note：帶時區與不帶時區的datetime彼此無法比較大小，故無法混用）
-def str2datetime(strdate, _timezone=False):
-    datetime_obj = datetime.strptime(strdate, "%Y-%m-%d")
+def str2datetime(date, _timezone=False):
+    if isinstance(date, datetime):
+        return date # 若已經是字串，則直接返回
+    
+    datetime_obj = datetime.strptime(date, "%Y-%m-%d")
     if _timezone:
         datetime_obj = datetime_obj.replace(tzinfo=timezone.utc)
     return datetime_obj
 
 def datetime2str(date):
+    if isinstance(date, str):
+        return date # 若已經是字串，則直接返回
+    
     if date is None:
         return None
     return date.strftime("%Y-%m-%d")

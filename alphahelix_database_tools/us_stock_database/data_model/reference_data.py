@@ -1,5 +1,6 @@
 from typing import List, Union
 from datetime import datetime, timedelta
+import pandas as pd
 
 from alphahelix_database_tools.utils.datetime_utils import str2datetime, datetime2str
 from .base_data import BaseDAO
@@ -101,7 +102,7 @@ class GicsCodeDAO(BaseDAO):
             "ticker", {f"values.{gics_field}": gics_code}
         )
         return sorted(ticker_list)
-
+        
 class MarketStatusDAO(BaseDAO):
     def __init__(self, uri):
         db_name = "Reference"
@@ -165,3 +166,59 @@ class MarketStatusDAO(BaseDAO):
                 return current_date
 
             current_date += timedelta(days=step)
+            
+class ErrorReportDAO(BaseDAO):
+    def __init__(self, uri):
+        db_name = "Reference"
+        collection_name = "error_report"
+        super().__init__(db_name, collection_name, uri)
+    
+    def get_latest_error_report(self):
+        return self.find_one({}, sort=[("created_timestamp", -1)])
+    
+    # def get_error_reports(self, start_timestamp, end_timestamp):
+    #     query_doc_list = list(self.find(query={"created_timestamp": {"$gte": start_timestamp, "$lte": end_timestamp}}))
+    #     result_list = []
+    #     for doc in query_doc_list:
+    #         analysis_df = self.analyze_report(doc["values"])
+    #         result_list.append({
+    #             "start_timestamp": doc["start_timestamp"],
+    #             "end_timestamp": doc["end_timestamp"],
+    #             "created_timestamp": doc["created_timestamp"],
+    #             "analysis": analysis_df
+    #         })
+    #     return result_list
+    
+    # def analyze_report(self, error_detect_result_list):
+    #     # 初始化結果存儲清單
+    #     detection_results = []
+
+    #     # 處理錯誤檢測結果
+    #     for result_dict in error_detect_result_list:
+    #         detector_name = result_dict.get("detector_name", "Unknown Detector")
+    #         theresold = result_dict["error_threshold"]
+    #         detector_description = result_dict.get("detector_description", "Unknown")
+    #         univ_name_list = ["all_data", "univ_spx500", "univ_ray3000"]
+
+    #         for univ_name in univ_name_list:
+    #             if univ_name in result_dict.get("error_analysis", {}):
+    #                 error_data = result_dict["error_analysis"][univ_name]
+    #                 error_count = error_data.get("error_count", 0)
+    #                 error_rate = error_data.get("error_rate", 0.0)
+
+    #                 # 判斷error_rate是否高於門檻
+    #                 is_above_threshold = error_rate > theresold
+
+    #                 # 添加結果到清單
+    #                 detection_results.append({
+    #                     "detector_name": detector_name,
+    #                     "detector_description": detector_description,
+    #                     "univ_name": univ_name,
+    #                     "error_count": error_count,
+    #                     "error_rate": round(error_rate, 4), # 四捨五入到小數點後四位
+    #                     "threshold": theresold,
+    #                     "is_above_threshold": is_above_threshold
+    #                 })
+
+    #     return detection_results
+    #     # return pd.DataFrame(detection_results).sort_values("univ_name", ascending=False)

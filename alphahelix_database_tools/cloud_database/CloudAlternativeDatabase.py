@@ -1,5 +1,5 @@
 from .AbstractCloudDatabase import *
-from alphahelix_database_tools.data_models.alternative_data_model import GpuDataModel #type: ignore
+from alphahelix_database_tools.us_stock_database.data_model.alternative_data import GpuDataModel
 from alphahelix_database_tools.data_scrapers.gpu_data_scraper import fetch_gpu_pricing
 
 class CloudAlternativeDatabase(AbstractCloudDatabase):

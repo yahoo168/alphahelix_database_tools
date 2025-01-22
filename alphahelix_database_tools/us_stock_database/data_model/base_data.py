@@ -40,7 +40,7 @@ class BaseDAO:
         index_info = self.collection.index_information()
 
         if index_name in index_info:
-            logging.info(f"Index {index_name} already exists. Skipping creation.")
+            # logging.info(f"Index {index_name} already exists. Skipping creation.")
             return
 
         # 創建索引
@@ -116,8 +116,12 @@ class BaseDAO:
         """刪除單筆資料"""
         return self.collection.delete_one(query)
     
-    # 供子類別覆寫，將原始資料轉換為指定格式
-    def _transform_data_df(self, df):
+    def count_documents(self, query):
+        """計算符合條件的資料數量"""
+        return self.collection.count_documents(query)
+    
+    def transform_data_df(self, df):
+        """供子類別覆寫，將原始資料轉換為指定格式"""
         return df
     
     def get_item_df_by_datetime(self, start_timestamp:datetime, end_timestamp:datetime, query:dict={}, projection:dict={}) -> pd.DataFrame:
@@ -188,7 +192,7 @@ class BaseDAO:
         find_params = {
             "filter": query,
             "projection": projection,
-            "batch_size": 1000
+            "batch_size": 500
         }
         
         if sort:
@@ -197,16 +201,15 @@ class BaseDAO:
             find_params["limit"] = limit
 
         # 執行查詢
-        query_result = self.collection.find(**find_params)
-        query_result_list = list(query_result)
+        query_result_list = list(self.collection.find(**find_params))
 
         if query_result_list:
             # 將查詢結果轉換為 DataFrame
             raw_df = pd.DataFrame(query_result_list).set_index("data_timestamp")
             item_df = pd.DataFrame(raw_df["values"].tolist(), index=raw_df.index)
 
-            # 轉換原始資料格式（若子類別有覆寫）
-            item_df = self._transform_data_df(item_df)
+            # 轉換原始資料格式（若子類別有覆寫，否則保持原狀）
+            item_df = self.transform_data_df(item_df)
 
             # 避免資料可能存在空值（可能原始資料存在錯誤）
             if np.nan in item_df.columns:
